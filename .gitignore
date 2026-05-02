@@ -2,3 +2,5 @@ node_modules/
 .next/
 data/
 !data/.gitkeep
+.env.local
+.env

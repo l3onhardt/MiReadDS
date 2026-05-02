@@ -177,12 +177,15 @@ function decryptApiKey(encrypted: string): string {
   return JSON.parse(decrypted).key;
 }
 
-const MIMO_API_BASE = "https://api.xiaomimimo.com/v1";
+const MIMO_API_BASE = "https://token-plan-sgp.xiaomimimo.com/v1";
 
 function getApiKey(): string {
+  // Prefer environment variable (server-side only, never exposed to frontend)
+  if (process.env.MIMO_API_KEY) return process.env.MIMO_API_KEY;
+
   const db = getDb();
   const row = db.prepare("SELECT value FROM settings WHERE key = 'api_key'").get() as { value: string } | undefined;
-  if (!row) throw new Error("请先在设置中配置 MiMo API Key");
+  if (!row) throw new Error("请先设置 MiMo API Key（环境变量 MIMO_API_KEY 或通过设置页面配置）");
   return decryptApiKey(row.value);
 }
 
