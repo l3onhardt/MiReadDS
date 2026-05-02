@@ -105,6 +105,9 @@ export async function importBook(file: File): Promise<Book> {
 
   insertMany(chapters);
 
+  // Trigger async character scan (fire-and-forget)
+  scanCharacters(bookId).catch((e) => console.error("Initial scan failed:", e));
+
   return db.prepare("SELECT * FROM books WHERE id = ?").get(bookId) as Book;
 }
 
