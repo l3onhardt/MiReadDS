@@ -300,31 +300,96 @@ export async function annotateChapter(chapterId: number) {
     "SELECT c.id, c.name, c.aliases, cv.mimo_voice_id FROM characters c LEFT JOIN character_voices cv ON cv.character_id = c.id WHERE c.book_id = ?"
   ).all(chapter.book_id) as any[];
 
-  // Mark as analyzing
   db.prepare("UPDATE chapters SET analysis_status = 'analyzing' WHERE id = ?").run(chapterId);
 
-  const charNames = characters.map((c) => `${c.name}(${c.id})`).join("、");
+  // Pre-split by natural paragraph boundaries (double newline or single newline for long text)
+  const rawParagraphs = chapter.content
+    .split(/\n{2,}/)
+    .map((p: string) => p.trim())
+    .filter((p: string) => p.length > 0);
 
-  // Split long chapters
-  const maxLen = 30000;
-  const text = chapter.content;
+  // Further split very long paragraphs that are clearly lists or have single-newline breaks
+  const paragraphs: string[] = [];
+  for (const p of rawParagraphs) {
+    if (p.length > 500 && p.includes("\n")) {
+      // Split by single newlines but merge back into groups
+      const lines = p.split("\n").map((l: string) => l.trim()).filter((l: string) => l.length > 0);
+      let group = "";
+      for (const line of lines) {
+        if (group && group.length + line.length > 300) {
+          paragraphs.push(group.trim());
+          group = line;
+        } else {
+          group = group ? group + " " + line : line;
+        }
+      }
+      if (group) paragraphs.push(group.trim());
+    } else {
+      paragraphs.push(p);
+    }
+  }
+
+  // Merge very short adjacent paragraphs (headings/titles with following text)
+  const mergedParagraphs: string[] = [];
+  for (let i = 0; i < paragraphs.length; i++) {
+    if (paragraphs[i].length < 30 && i + 1 < paragraphs.length && !paragraphs[i + 1].startsWith("#")) {
+      mergedParagraphs.push(paragraphs[i] + "。 " + paragraphs[i + 1]);
+      i++;
+    } else {
+      mergedParagraphs.push(paragraphs[i]);
+    }
+  }
+
+  const charNames = characters.map((c) => `${c.name}(${c.id})`).join("、");
+  const maxLen = 15000;
   let allSegments: any[] = [];
 
-  for (let i = 0; i < text.length; i += maxLen) {
-    const chunk = text.slice(i, Math.min(i + maxLen, text.length));
-    const prompt = `分析以下小说片段，将文本拆分为朗读段落（按自然段分割）。每段标注：type（"narration"叙述 或 "dialogue"对话）、如果是对话则标注character为说话角色名、emotion（情绪标签如：开心、悲伤、生气、轻声、急促、疲惫、温和、严肃、耳语、惊讶，用空格分隔最多2个）。
+  for (let batchStart = 0; batchStart < mergedParagraphs.length; batchStart += 30) {
+    const batch = mergedParagraphs.slice(batchStart, batchStart + 30);
+    const paragraphList = batch.map((p, idx) => `[P${batchStart + idx}] ${p}`).join("\n\n");
+
+    const prompt = `以下文本的每个 [PX] 标记是一个朗读段落。请为每个段落标注：type（"narration"叙述 或 "dialogue"对话）、如果是对话则标注character为说话角色名、emotion（情绪标签如：开心、悲伤、生气、轻声、急促、疲惫、温和、严肃、耳语、惊讶，用空格分隔最多2个。旁白可留空）。
 
 角色列表：${charNames}
 
 文本：
-${chunk}
+${paragraphList}
 
-只输出JSON：{"segments": [{"type":"narration","text":"..."},{"type":"dialogue","character":"林婉儿","text":"...","emotion":"轻声"} ]}`;
+只输出JSON：{"segments": [{"index":"P0","type":"narration","character":null,"emotion":""}, {"index":"P1","type":"dialogue","character":"林婉儿","emotion":"轻声"}]}`;
 
     const result = await callMiMoPro([{ role: "user", content: prompt }]);
-    const segs = result.segments || [];
+    const segs = (result.segments || []).map((s: any) => {
+      const idx = parseInt((s.index || "").replace("P", ""));
+      return {
+        segment_index: idx,
+        type: s.type || "narration",
+        text: mergedParagraphs[idx] || "",
+        character: s.character || null,
+        emotion: s.emotion || null,
+      };
+    });
     allSegments = allSegments.concat(segs);
   }
+
+  // Merge adjacent narration segments that are very short (< 80 chars)
+  const final: any[] = [];
+  let buffer = { type: "narration", text: "", emotion: "", character: null as string | null };
+  for (const s of allSegments) {
+    if (s.type === "narration" && (!s.character || s.character === "")) {
+      if (buffer.text && buffer.text.length + s.text.length < 400) {
+        buffer.text += "\n" + s.text;
+      } else if (buffer.text) {
+        final.push({ ...buffer });
+        buffer = { type: "narration", text: s.text, emotion: s.emotion || "", character: null };
+      } else {
+        buffer = { type: "narration", text: s.text, emotion: s.emotion || "", character: null };
+      }
+    } else {
+      if (buffer.text) { final.push({ ...buffer }); buffer.text = ""; }
+      final.push({ type: s.type, text: s.text, emotion: s.emotion || "", character: s.character || null });
+    }
+  }
+  if (buffer.text) final.push({ ...buffer });
 
   // Save segments
   const insertSeg = db.prepare(
@@ -336,15 +401,13 @@ ${chunk}
   for (const c of characters) {
     charMap.set(c.name, c.id);
     if (c.aliases) {
-      try {
-        for (const a of JSON.parse(c.aliases)) charMap.set(a, c.id);
-      } catch {}
+      try { for (const a of JSON.parse(c.aliases)) charMap.set(a, c.id); } catch {}
     }
   }
 
   const insertAll = db.transaction(() => {
-    for (let i = 0; i < allSegments.length; i++) {
-      const s = allSegments[i];
+    for (let i = 0; i < final.length; i++) {
+      const s = final[i];
       const charId = s.character ? (charMap.get(s.character) || null) : null;
       insertSeg.run(chapterId, i, s.type, charId, s.text, s.emotion || null);
     }
