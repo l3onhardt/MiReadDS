@@ -324,3 +324,121 @@ ${chunk}
 
   db.prepare("UPDATE chapters SET analysis_status = 'done' WHERE id = ?").run(chapterId);
 }
+
+export async function synthesizeSegment(
+  chapterId: number,
+  segmentIndex: number,
+  text: string,
+  characterId: number | null,
+  emotion: string | null,
+  voiceId: string
+): Promise<{ audioPath: string; base64: string }> {
+  const db = getDb();
+
+  // Check cache
+  const cached = db.prepare(
+    "SELECT * FROM audio_cache WHERE chapter_id = ? AND segment_index = ?"
+  ).get(chapterId, segmentIndex) as { audio_path: string } | undefined;
+
+  if (cached && fs.existsSync(cached.audio_path)) {
+    const audioBuffer = fs.readFileSync(cached.audio_path);
+    return { audioPath: cached.audio_path, base64: audioBuffer.toString("base64") };
+  }
+
+  // Build style tags
+  let styledText = text;
+  if (emotion) {
+    styledText = `<style>${emotion}</style>${styledText}`;
+  }
+
+  const apiKey = getApiKey();
+
+  // TTS call with retry (max 3 attempts with exponential backoff)
+  let res: Response | undefined;
+  for (let retry = 0; retry < 3; retry++) {
+    try {
+      res = await fetch(`${MIMO_API_BASE}/chat/completions`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "api-key": apiKey,
+        },
+        body: JSON.stringify({
+          model: "mimo-v2.5-tts",
+          messages: [{ role: "user", content: styledText }],
+          audio: {
+            format: "mp3",
+            voice: voiceId,
+          },
+        }),
+      });
+      if (res.ok) break;
+    } catch {}
+    if (retry < 2) await new Promise((r) => setTimeout(r, 1000 * (retry + 1)));
+  }
+
+  if (!res || !res.ok) throw new Error(`TTS API error: ${res?.status || "network"}`);
+  const data = await res.json();
+  const base64Audio = data.choices?.[0]?.message?.audio?.data;
+  if (!base64Audio) throw new Error("TTS response missing audio data");
+
+  const audioBuffer = Buffer.from(base64Audio, "base64");
+
+  // Get book_id for path
+  const chapter = db.prepare(
+    "SELECT c.book_id FROM chapters c WHERE c.id = ?"
+  ).get(chapterId) as { book_id: number };
+
+  const audioDir = path.join(process.cwd(), "data", "audio", String(chapter.book_id));
+  fs.mkdirSync(audioDir, { recursive: true });
+  const audioPath = path.join(audioDir, `${chapterId}_${segmentIndex}.mp3`);
+  fs.writeFileSync(audioPath, audioBuffer);
+
+  db.prepare(
+    `INSERT OR REPLACE INTO audio_cache (chapter_id, segment_index, audio_path, format, size_bytes)
+     VALUES (?, ?, ?, 'mp3', ?)`
+  ).run(chapterId, segmentIndex, audioPath, audioBuffer.length);
+
+  // Enforce cache limit (3GB per book)
+  enforceCacheLimit(chapter.book_id);
+
+  return { audioPath, base64: base64Audio };
+}
+
+function enforceCacheLimit(bookId: number) {
+  const db = getDb();
+  const maxBytes = 3 * 1024 * 1024 * 1024; // 3GB
+  const result = db.prepare(
+    `SELECT COALESCE(SUM(ac.size_bytes), 0) as total
+     FROM audio_cache ac
+     JOIN chapters c ON c.id = ac.chapter_id
+     WHERE c.book_id = ?`
+  ).get(bookId) as { total: number };
+
+  let total = result.total;
+  if (total > maxBytes) {
+    const oldest = db.prepare(
+      `SELECT ac.id, ac.audio_path, ac.size_bytes
+       FROM audio_cache ac
+       JOIN chapters c ON c.id = ac.chapter_id
+       WHERE c.book_id = ?
+       ORDER BY ac.created_at ASC`
+    ).all(bookId) as { id: number; audio_path: string; size_bytes: number }[];
+
+    for (const row of oldest) {
+      if (total <= maxBytes * 0.8) break;
+      db.prepare("DELETE FROM audio_cache WHERE id = ?").run(row.id);
+      if (fs.existsSync(row.audio_path)) fs.unlinkSync(row.audio_path);
+      total -= row.size_bytes;
+    }
+  }
+}
+
+export function saveProgress(bookId: number, chapterIndex: number, segmentIndex: number) {
+  const db = getDb();
+  db.prepare(
+    `INSERT INTO reading_progress (book_id, chapter_index, segment_index, updated_at)
+     VALUES (?, ?, ?, datetime('now'))
+     ON CONFLICT(book_id) DO UPDATE SET chapter_index = ?, segment_index = ?, updated_at = datetime('now')`
+  ).run(bookId, chapterIndex, segmentIndex, chapterIndex, segmentIndex);
+}
