@@ -49,8 +49,22 @@ export async function importBook(file: File): Promise<Book> {
 
     text = await new Promise<string>((resolve, reject) => {
       epub.on("end", () => {
-        const fullText = (epub.flow || []).map((f: any) => f.text || "").join("\n\n");
-        resolve(fullText);
+        const flow = epub.flow || [];
+        if (flow.length === 0) {
+          resolve("");
+          return;
+        }
+        const chapterTexts: string[] = [];
+        let completed = 0;
+        flow.forEach((f: any, idx: number) => {
+          epub.getChapter(f.id, (err: Error | null, chapterText: string) => {
+            if (!err && chapterText) chapterTexts[idx] = chapterText;
+            completed++;
+            if (completed === flow.length) {
+              resolve(chapterTexts.filter(Boolean).join("\n\n"));
+            }
+          });
+        });
       });
       epub.on("error", (err: Error) => reject(err));
       epub.parse();
@@ -152,7 +166,7 @@ export function deleteBook(id: number) {
 
 import crypto from "crypto";
 
-const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || "mireader-dev-key-32chars!!!";
+const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY || "mireader-dev-key-32chars!!!!!!!!";
 
 function decryptApiKey(encrypted: string): string {
   const [ivHex, data] = encrypted.split(":");
