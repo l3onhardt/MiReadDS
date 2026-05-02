@@ -113,7 +113,17 @@ export async function importBook(file: File): Promise<Book> {
 
 export function listBooks(): Book[] {
   const db = getDb();
-  return db.prepare("SELECT * FROM books ORDER BY updated_at DESC").all() as Book[];
+  const books = db.prepare(`
+    SELECT b.*,
+      (SELECT COUNT(*) FROM chapters WHERE book_id = b.id) as chapter_count,
+      (SELECT COUNT(*) FROM characters WHERE book_id = b.id) as character_count,
+      p.chapter_index as progress_chapter,
+      p.segment_index as progress_segment
+    FROM books b
+    LEFT JOIN reading_progress p ON p.book_id = b.id
+    ORDER BY b.updated_at DESC
+  `).all();
+  return books as Book[];
 }
 
 export function getBook(id: number) {

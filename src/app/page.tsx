@@ -9,9 +9,9 @@ interface Book {
   title: string;
   author: string | null;
   cover_color: string;
-  chapters: { id: number; analysis_status: string }[];
-  characters: any[];
-  progress: { chapter_index: number } | null;
+  chapter_count: number;
+  character_count: number;
+  progress_chapter: number | null;
 }
 
 export default function BookshelfPage() {
@@ -74,11 +74,11 @@ export default function BookshelfPage() {
             title={book.title}
             author={book.author}
             cover_color={book.cover_color}
-            chapterCount={book.chapters?.length || 0}
-            characterCount={book.characters?.length || 0}
+            chapterCount={book.chapter_count || 0}
+            characterCount={book.character_count || 0}
             progressPercent={
-              book.progress && book.chapters
-                ? Math.round((book.progress.chapter_index / (book.chapters.length - 1)) * 100)
+              book.progress_chapter != null && book.chapter_count > 0
+                ? Math.round((book.progress_chapter / (book.chapter_count - 1)) * 100)
                 : 0
             }
           />
