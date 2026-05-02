@@ -395,7 +395,10 @@ export async function synthesizeSegment(
         },
         body: JSON.stringify({
           model: "mimo-v2.5-tts",
-          messages: [{ role: "user", content: styledText }],
+          messages: [
+            { role: "assistant", content: "" },
+            { role: "user", content: styledText }
+          ],
           audio: {
             format: "mp3",
             voice: voiceId,
