@@ -4,7 +4,6 @@ import type { SceneDot, SceneStatus } from "@/components/SceneTimeline";
 import { useParams } from "next/navigation";
 import { PlayerBar } from "@/components/PlayerBar";
 import { ReadingContent } from "@/components/ReadingContent";
-import { CharacterPanel } from "@/components/CharacterPanel";
 import { ArrowLeft, List } from "lucide-react";
 import Link from "next/link";
 
@@ -41,7 +40,6 @@ export default function ReaderPage() {
   const [genProgress, setGenProgress] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
-  const [characterSheetOpen, setCharacterSheetOpen] = useState(false);
   const [chapterListOpen, setChapterListOpen] = useState(false);
 
   const [currentSceneIdx, setCurrentSceneIdx] = useState(0);
@@ -423,12 +421,6 @@ export default function ReaderPage() {
           </button>
         </div>
       </div>
-
-      <CharacterPanel
-        characters={(book.characters || []).map((c: any) => ({ id: c.id, name: c.name, voice_name: c.voice_name, role_type: c.role_type || "supporting" }))}
-        activeCharacterName={manifest?.scenes?.[currentSceneIdx]?.speaker || null}
-        isOpen={characterSheetOpen} onToggle={() => setCharacterSheetOpen(!characterSheetOpen)}
-      />
 
       <audio ref={audioRef}
         onEnded={advance}
