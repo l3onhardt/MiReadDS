@@ -35,6 +35,7 @@ export default function ReaderPage() {
   const [currentChapterIdx, setCurrentChapterIdx] = useState(0);
   const [manifest, setManifest] = useState<SceneManifest | null>(null);
   const [audioStatus, setAudioStatus] = useState("pending");
+  const [genProgress, setGenProgress] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
   const [characterSheetOpen, setCharacterSheetOpen] = useState(false);
@@ -132,11 +133,13 @@ export default function ReaderPage() {
     endedGuard.current = false;
     setManifest(null);
     setAudioStatus("pending");
+    setGenProgress(0);
     setCurrentSceneIdx(0);
     setSceneTimeMs(0);
     setTotalTimeMs(0);
 
     try {
+      // Trigger generation if needed
       let res = await fetch("/api/tts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -144,11 +147,14 @@ export default function ReaderPage() {
       });
       let data = await res.json();
 
-      if (data.status === "generating") {
-        for (let i = 0; i < 60; i++) {
+      // If generating, poll with progress
+      if (data.status === "generating" || data.status === "pending") {
+        setAudioStatus("generating");
+        for (let i = 0; i < 120; i++) {
           await new Promise((r) => setTimeout(r, 3000));
           res = await fetch(`/api/tts?chapterId=${chapterId}`);
           data = await res.json();
+          setGenProgress(data.progress || 0);
           if (data.status === "ready" || data.status === "error") break;
           setAudioStatus("generating");
         }
@@ -328,6 +334,7 @@ export default function ReaderPage() {
           totalChapters={book.chapters.length}
           isPlaying={isPlaying}
           audioStatus={audioStatus}
+          genProgress={genProgress}
           onTogglePlay={togglePlay}
           onPrevChapter={() => currentChapterIdx > 0 && goToChapter(currentChapterIdx - 1)}
           onNextChapter={() => currentChapterIdx < book.chapters.length - 1 && goToChapter(currentChapterIdx + 1)}

@@ -425,38 +425,40 @@ function enforceChapterCacheLimit(bookId: number) {
 
 export async function generateChapterAudio(chapterId: number): Promise<{ audioPath: string; durationMs: number } | null> {
   const db = getDb();
-  const chapter = db.prepare("SELECT * FROM chapters WHERE id = ?").get(chapterId) as Chapter | undefined;
-  if (!chapter) throw new Error("章节不存在");
-
-  // Check if already ready
-  const existing = db.prepare("SELECT * FROM chapter_audio WHERE chapter_id = ? AND status = 'ready'").get(chapterId) as any;
-  if (existing && fs.existsSync(existing.audio_path)) {
-    return { audioPath: existing.audio_path, durationMs: existing.duration_ms || 0 };
-  }
-
-  // Set status to generating
-  db.prepare(
-    `INSERT INTO chapter_audio (chapter_id, audio_path, status) VALUES (?, '', 'generating')
-     ON CONFLICT(chapter_id) DO UPDATE SET status = 'generating', error_message = null`
-  ).run(chapterId);
-
-  const apiKey = getApiKey();
-  const book = db.prepare("SELECT * FROM books WHERE id = ?").get(chapter.book_id) as any;
-  const characters = db.prepare(
-    "SELECT c.name, cv.mimo_voice_id FROM characters c LEFT JOIN character_voices cv ON cv.character_id = c.id WHERE c.book_id = ?"
-  ).all(chapter.book_id) as any[];
-
-  // Determine base narration voice
-  const baseVoice = book?.narrator_voice || "白桦";
-
-  // Build character context for director
-  const charContext = characters.length > 0
-    ? "角色列表：" + characters.map((c: any) => `${c.name}(${c.mimo_voice_id || "未知声线"})`).join("、")
-    : "";
 
   try {
+    const chapter = db.prepare("SELECT * FROM chapters WHERE id = ?").get(chapterId) as Chapter | undefined;
+    if (!chapter) throw new Error("章节不存在");
+
+    // Check if already ready
+    const existing = db.prepare("SELECT * FROM chapter_audio WHERE chapter_id = ? AND status = 'ready'").get(chapterId) as any;
+    if (existing && fs.existsSync(existing.audio_path)) {
+      return { audioPath: existing.audio_path, durationMs: existing.duration_ms || 0 };
+    }
+
+    // If already generating, don't start again
+    const inProgress = db.prepare("SELECT * FROM chapter_audio WHERE chapter_id = ? AND status = 'generating'").get(chapterId) as any;
+    if (inProgress) return null;
+
+    // Set status to generating
+    db.prepare(
+      `INSERT INTO chapter_audio (chapter_id, audio_path, status) VALUES (?, '', 'generating')
+       ON CONFLICT(chapter_id) DO UPDATE SET status = 'generating', error_message = null`
+    ).run(chapterId);
+
+    const apiKey = getApiKey();
+    const book = db.prepare("SELECT * FROM books WHERE id = ?").get(chapter.book_id) as any;
+    const characters = db.prepare(
+      "SELECT c.name, cv.mimo_voice_id FROM characters c LEFT JOIN character_voices cv ON cv.character_id = c.id WHERE c.book_id = ?"
+    ).all(chapter.book_id) as any[];
+
+    const baseVoice = book?.narrator_voice || "白桦";
+
+    const charContext = characters.length > 0
+      ? "角色列表：" + characters.map((c: any) => `${c.name}(${c.mimo_voice_id || "未知声线"})`).join("、")
+      : "";
+
     // === Phase 1: LLM Director ===
-    // Batch chapter content if too long (>6000 chars)
     const maxBatchSize = 6000;
     let allScenes: DirectorScene[] = [];
 
@@ -490,69 +492,95 @@ ${batchText}
         emotion: s.emotion || "",
       }));
       allScenes = allScenes.concat(scenes);
+
+      // Update progress
+      db.prepare("UPDATE chapter_audio SET size_bytes = ? WHERE chapter_id = ?")
+        .run(Math.round((batchStart + batchText.length) / chapter.content.length * 50), chapterId);
     }
 
     if (allScenes.length === 0) {
-      // Fallback: treat whole chapter as one narration scene
       allScenes = [{ text: chapter.content, speaker: null, voice_style: "", emotion: "沉稳" }];
     }
 
-    // === Phase 2: TTS per scene ===
+    // === Phase 2: TTS per scene (parallel with concurrency limit) ===
     const sceneDir = path.join(CHAPTER_AUDIO_DIR, String(chapterId));
     fs.mkdirSync(sceneDir, { recursive: true });
 
-    const manifest: SceneManifest = { scenes: [], total_duration_ms: 0 };
-    for (let i = 0; i < allScenes.length; i++) {
-      const tmpDir = path.join(sceneDir, "tmp");
-      fs.mkdirSync(tmpDir, { recursive: true });
-      const tmpPath = await generateSceneAudio(allScenes[i], baseVoice, apiKey, chapter.book_id, i, tmpDir);
+    const totalScenes = allScenes.length;
 
-      // Move to permanent location
-      const permPath = path.join(sceneDir, `scene_${i}.mp3`);
-      fs.renameSync(tmpPath, permPath);
-      try { fs.rmSync(tmpDir, { recursive: true }); } catch {}
+    // Generate scenes in parallel batches of 5
+    const CONCURRENCY = 5;
+    const sceneResults: { index: number; path: string; duration_ms: number }[] = [];
 
-      const dur = getAudioDuration(permPath);
-      manifest.scenes.push({
-        path: permPath,
-        text: allScenes[i].text,
-        speaker: allScenes[i].speaker,
-        voice_style: allScenes[i].voice_style,
-        emotion: allScenes[i].emotion,
-        duration_ms: dur,
+    for (let batchStart = 0; batchStart < totalScenes; batchStart += CONCURRENCY) {
+      const batch = allScenes.slice(batchStart, batchStart + CONCURRENCY);
+      const batchPromises = batch.map(async (scene, offset) => {
+        const i = batchStart + offset;
+        const tmpDir = path.join(sceneDir, `tmp_${i}`);
+        fs.mkdirSync(tmpDir, { recursive: true });
+        const tmpPath = await generateSceneAudio(scene, baseVoice, apiKey, chapter.book_id, i, tmpDir);
+        const permPath = path.join(sceneDir, `scene_${i}.mp3`);
+        fs.renameSync(tmpPath, permPath);
+        try { fs.rmSync(tmpDir, { recursive: true }); } catch {}
+        const dur = getAudioDuration(permPath);
+        return { index: i, path: permPath, duration_ms: dur };
       });
-      manifest.total_duration_ms += dur;
+
+      const batchResults = await Promise.all(batchPromises);
+      sceneResults.push(...batchResults);
+
+      // Update progress: 50 + (progress * 50) = 50-100
+      const progress = Math.round(50 + (batchStart + batch.length) / totalScenes * 50);
+      db.prepare("UPDATE chapter_audio SET size_bytes = ? WHERE chapter_id = ?")
+        .run(progress, chapterId);
     }
 
-    // Save manifest to database (use first scene path as audio_path for compat)
+    sceneResults.sort((a, b) => a.index - b.index);
+
+    const manifest: SceneManifest = { scenes: [], total_duration_ms: 0 };
+    for (const r of sceneResults) {
+      const scene = allScenes[r.index];
+      manifest.scenes.push({
+        path: r.path,
+        text: scene.text,
+        speaker: scene.speaker,
+        voice_style: scene.voice_style,
+        emotion: scene.emotion,
+        duration_ms: r.duration_ms,
+      });
+      manifest.total_duration_ms += r.duration_ms;
+    }
+
+    // Save manifest
     db.prepare(
       `UPDATE chapter_audio SET audio_path = ?, format = 'mp3', duration_ms = ?, size_bytes = ?, scene_script = ?, status = 'ready', error_message = null
        WHERE chapter_id = ?`
-    ).run(manifest.scenes[0]?.path || "", manifest.total_duration_ms, 0, JSON.stringify(manifest), chapterId);
+    ).run(manifest.scenes[0]?.path || "", manifest.total_duration_ms, 100, JSON.stringify(manifest), chapterId);
 
-    // Update chapter analysis status
     db.prepare("UPDATE chapters SET analysis_status = 'done' WHERE id = ?").run(chapterId);
-
     enforceChapterCacheLimit(chapter.book_id);
 
     return { audioPath: manifest.scenes[0]?.path || "", durationMs: manifest.total_duration_ms };
   } catch (e: any) {
-    db.prepare(
-      `UPDATE chapter_audio SET status = 'error', error_message = ? WHERE chapter_id = ?`
-    ).run(e.message, chapterId);
+    try {
+      db.prepare("UPDATE chapter_audio SET status = 'error', error_message = ? WHERE chapter_id = ?")
+        .run(String(e.message || e).slice(0, 500), chapterId);
+    } catch {}
     throw e;
   }
 }
 
-export function getChapterAudioStatus(chapterId: number): { status: string; audioPath: string | null; durationMs: number; sceneManifest: any } {
+export function getChapterAudioStatus(chapterId: number): { status: string; audioPath: string | null; durationMs: number; sceneManifest: any; progress: number } {
   const db = getDb();
-  const row = db.prepare("SELECT status, audio_path, duration_ms, scene_script FROM chapter_audio WHERE chapter_id = ?").get(chapterId) as any;
-  if (!row) return { status: "pending", audioPath: null, durationMs: 0, sceneManifest: null };
+  const row = db.prepare("SELECT status, audio_path, duration_ms, scene_script, size_bytes FROM chapter_audio WHERE chapter_id = ?").get(chapterId) as any;
+  if (!row) return { status: "pending", audioPath: null, durationMs: 0, sceneManifest: null, progress: 0 };
   let sceneManifest: any = null;
   if (row.scene_script) {
     try { sceneManifest = JSON.parse(row.scene_script); } catch {}
   }
-  return { status: row.status, audioPath: row.audio_path, durationMs: row.duration_ms || 0, sceneManifest };
+  // size_bytes doubles as progress (0-100) during generation
+  const progress = (row.size_bytes && row.size_bytes > 0 && row.status === 'generating') ? row.size_bytes : (row.status === 'ready' ? 100 : 0);
+  return { status: row.status, audioPath: row.audio_path, durationMs: row.duration_ms || 0, sceneManifest, progress };
 }
 
 export function getSceneAudioPath(chapterId: number, sceneIndex: number): string | null {

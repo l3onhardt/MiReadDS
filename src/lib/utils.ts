@@ -67,11 +67,13 @@ export function splitTxtIntoChapters(text: string): { title: string; content: st
   if (markers.length > 1) {
     const chapters: { title: string; content: string }[] = [];
 
-    // Content before first chapter marker — treat as 前言/简介 if short, or first chapter
+    // Content before first chapter marker — skip if it's just book metadata
     if (markers[0].index > 0) {
       const preContent = text.slice(0, markers[0].index).trim();
-      if (preContent.length > 50) {
-        // Find the book title line
+      // Skip metadata-only content: short + has author/intro patterns
+      const isMetadata = preContent.length < 500 &&
+        /作者|简介|内容|前言|目录/.test(preContent.split("\n").slice(0, 5).join("\n"));
+      if (preContent.length > 50 && !isMetadata) {
         const preLines = preContent.split("\n").filter((l) => l.trim());
         const preTitle = preLines.length > 0 ? preLines[0].trim().slice(0, 30) : "前言";
         chapters.push({ title: preTitle, content: preContent });

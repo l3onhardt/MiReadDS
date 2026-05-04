@@ -12,11 +12,13 @@ export async function POST(req: NextRequest) {
 
     let status = getChapterAudioStatus(chapterId);
 
+    // If pending or error, trigger async generation and return immediately
     if (status.status === "pending" || status.status === "error") {
-      const result = await generateChapterAudio(chapterId);
-      if (result) {
-        status = getChapterAudioStatus(chapterId);
-      }
+      // Fire and forget — client polls for completion
+      generateChapterAudio(chapterId).catch((e) =>
+        console.error(`Chapter ${chapterId} generation failed:`, e)
+      );
+      status = getChapterAudioStatus(chapterId);
     }
 
     return NextResponse.json({

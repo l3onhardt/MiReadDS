@@ -8,6 +8,7 @@ interface PlayerBarProps {
   totalChapters: number;
   isPlaying: boolean;
   audioStatus: string;
+  genProgress: number;
   onTogglePlay: () => void;
   onPrevChapter: () => void;
   onNextChapter: () => void;
@@ -20,7 +21,7 @@ interface PlayerBarProps {
 }
 
 export function PlayerBar({
-  chapterTitle, chapterIdx, totalChapters, isPlaying, audioStatus,
+  chapterTitle, chapterIdx, totalChapters, isPlaying, audioStatus, genProgress,
   onTogglePlay, onPrevChapter, onNextChapter,
   currentTimeMs, durationMs, positionPercent, onSeek,
   speed, onSpeedChange,
@@ -79,7 +80,7 @@ export function PlayerBar({
             </span>
             {isGenerating && (
               <span className="text-xs" style={{ color: "var(--accent)" }}>
-                首次生成约需30-90秒...
+                生成中 {genProgress}%...
               </span>
             )}
           </div>
