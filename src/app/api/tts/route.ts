@@ -1,23 +1,65 @@
 import { NextRequest, NextResponse } from "next/server";
-import { synthesizeSegment } from "@/lib/services";
-import { getDb } from "@/lib/db";
+import { generateChapterAudio, getChapterAudioStatus, getSceneAudioPath } from "@/lib/services";
+import fs from "fs";
 
 export async function POST(req: NextRequest) {
   try {
-    const { chapterId, segmentIndex, text, characterId, emotion } = await req.json();
+    const { chapterId } = await req.json();
 
-    // Look up voice for this character
-    const db = getDb();
-    let voiceId = "mimo_default";
-    if (characterId) {
-      const voice = db.prepare("SELECT mimo_voice_id FROM character_voices WHERE character_id = ?").get(characterId) as { mimo_voice_id: string } | undefined;
-      if (voice) voiceId = voice.mimo_voice_id;
+    if (!chapterId) {
+      return NextResponse.json({ error: "chapterId is required" }, { status: 400 });
     }
 
-    const result = await synthesizeSegment(chapterId, segmentIndex, text, characterId, emotion, voiceId);
-    return NextResponse.json(result);
+    let status = getChapterAudioStatus(chapterId);
+
+    if (status.status === "pending" || status.status === "error") {
+      const result = await generateChapterAudio(chapterId);
+      if (result) {
+        status = getChapterAudioStatus(chapterId);
+      }
+    }
+
+    return NextResponse.json({
+      status: status.status,
+      durationMs: status.durationMs,
+      sceneManifest: status.sceneManifest,
+    });
   } catch (e: any) {
     console.error("TTS error:", e);
     return NextResponse.json({ error: e.message }, { status: 500 });
   }
+}
+
+export async function GET(req: NextRequest) {
+  const chapterId = req.nextUrl.searchParams.get("chapterId");
+  const scene = req.nextUrl.searchParams.get("scene");
+
+  if (!chapterId) {
+    return NextResponse.json({ error: "chapterId required" }, { status: 400 });
+  }
+
+  // If scene index provided, serve that specific scene MP3
+  if (scene !== null) {
+    const scenePath = getSceneAudioPath(parseInt(chapterId), parseInt(scene));
+    if (!scenePath || !fs.existsSync(scenePath)) {
+      return NextResponse.json({ error: "Scene not found" }, { status: 404 });
+    }
+    const buffer = fs.readFileSync(scenePath);
+    return new NextResponse(buffer, {
+      headers: {
+        "Content-Type": "audio/mpeg",
+        "Content-Length": String(buffer.length),
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "public, max-age=31536000",
+      },
+    });
+  }
+
+  // Otherwise return status with manifest
+  const status = getChapterAudioStatus(parseInt(chapterId));
+  return NextResponse.json({
+    status: status.status,
+    durationMs: status.durationMs,
+    sceneManifest: status.sceneManifest,
+  });
 }

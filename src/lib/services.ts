@@ -132,7 +132,7 @@ export function listBooks(): Book[] {
       (SELECT COUNT(*) FROM chapters WHERE book_id = b.id) as chapter_count,
       (SELECT COUNT(*) FROM characters WHERE book_id = b.id) as character_count,
       p.chapter_index as progress_chapter,
-      p.segment_index as progress_segment
+      p.position_ms as progress_position_ms
     FROM books b
     LEFT JOIN reading_progress p ON p.book_id = b.id
     ORDER BY b.updated_at DESC
@@ -177,7 +177,7 @@ function decryptApiKey(encrypted: string): string {
   return JSON.parse(decrypted).key;
 }
 
-const MIMO_API_BASE = "https://token-plan-sgp.xiaomimimo.com/v1";
+const MIMO_API_BASE = process.env.MIMO_API_BASE || "https://token-plan-sgp.xiaomimimo.com/v1";
 
 function getApiKey(): string {
   // Prefer environment variable (server-side only, never exposed to frontend)
@@ -270,11 +270,12 @@ ${samples.join("\n---\n")}
     }
   }
 
-  // Voice pool — assign by gender + age
+  // Voice pool — assign by gender + age, mapped to actual MiMo v2.5 presets
+  // Presets: 冰糖(活泼少女), 茉莉(知性女声), 苏打(阳光少年), 白桦(成熟男声)
   const VOICE_POOL: Record<string, Record<string, string[]>> = {
-    "女": { "儿童": ["female_child"], "青年": ["default_zh"], "中年": ["default_zh"], "老年": ["default_zh"] },
-    "男": { "儿童": ["male_child"], "青年": ["male_youth"], "中年": ["male_adult"], "老年": ["male_elder"] },
-    "未知": { "青年": ["mimo_default"] },
+    "女": { "儿童": ["冰糖"], "青年": ["冰糖"], "中年": ["茉莉"], "老年": ["茉莉"] },
+    "男": { "儿童": ["苏打"], "青年": ["苏打"], "中年": ["白桦"], "老年": ["白桦"] },
+    "未知": { "青年": ["白桦"] },
   };
 
   const insertVoice = db.prepare(
@@ -291,181 +292,65 @@ ${samples.join("\n---\n")}
   }
 }
 
-export async function annotateChapter(chapterId: number) {
-  const db = getDb();
-  const chapter = db.prepare("SELECT * FROM chapters WHERE id = ?").get(chapterId) as Chapter | undefined;
-  if (!chapter) throw new Error("章节不存在");
+// ============================================================
+// Chapter audio generation pipeline
+// ============================================================
 
-  const characters = db.prepare(
-    "SELECT c.id, c.name, c.aliases, cv.mimo_voice_id FROM characters c LEFT JOIN character_voices cv ON cv.character_id = c.id WHERE c.book_id = ?"
-  ).all(chapter.book_id) as any[];
-
-  db.prepare("UPDATE chapters SET analysis_status = 'analyzing' WHERE id = ?").run(chapterId);
-
-  // Pre-split by natural paragraph boundaries (double newline or single newline for long text)
-  const rawParagraphs = chapter.content
-    .split(/\n{2,}/)
-    .map((p: string) => p.trim())
-    .filter((p: string) => p.length > 0);
-
-  // Further split very long paragraphs that are clearly lists or have single-newline breaks
-  const paragraphs: string[] = [];
-  for (const p of rawParagraphs) {
-    if (p.length > 500 && p.includes("\n")) {
-      // Split by single newlines but merge back into groups
-      const lines = p.split("\n").map((l: string) => l.trim()).filter((l: string) => l.length > 0);
-      let group = "";
-      for (const line of lines) {
-        if (group && group.length + line.length > 300) {
-          paragraphs.push(group.trim());
-          group = line;
-        } else {
-          group = group ? group + " " + line : line;
-        }
-      }
-      if (group) paragraphs.push(group.trim());
-    } else {
-      paragraphs.push(p);
-    }
-  }
-
-  // Merge very short adjacent paragraphs (headings/titles with following text)
-  const mergedParagraphs: string[] = [];
-  for (let i = 0; i < paragraphs.length; i++) {
-    if (paragraphs[i].length < 30 && i + 1 < paragraphs.length && !paragraphs[i + 1].startsWith("#")) {
-      mergedParagraphs.push(paragraphs[i] + "。 " + paragraphs[i + 1]);
-      i++;
-    } else {
-      mergedParagraphs.push(paragraphs[i]);
-    }
-  }
-
-  const charNames = characters.map((c) => `${c.name}(${c.id})`).join("、");
-  const maxLen = 15000;
-  let allSegments: any[] = [];
-
-  for (let batchStart = 0; batchStart < mergedParagraphs.length; batchStart += 30) {
-    const batch = mergedParagraphs.slice(batchStart, batchStart + 30);
-    const paragraphList = batch.map((p, idx) => `[P${batchStart + idx}] ${p}`).join("\n\n");
-
-    const prompt = `以下文本的每个 [PX] 标记是一个朗读段落。请为每个段落标注：type（"narration"叙述 或 "dialogue"对话）、如果是对话则标注character为说话角色名、emotion（情绪标签如：开心、悲伤、生气、轻声、急促、疲惫、温和、严肃、耳语、惊讶，用空格分隔最多2个。旁白可留空）。
-
-角色列表：${charNames}
-
-文本：
-${paragraphList}
-
-只输出JSON：{"segments": [{"index":"P0","type":"narration","character":null,"emotion":""}, {"index":"P1","type":"dialogue","character":"林婉儿","emotion":"轻声"}]}`;
-
-    const result = await callMiMoPro([{ role: "user", content: prompt }]);
-    const segs = (result.segments || []).map((s: any) => {
-      const idx = parseInt((s.index || "").replace("P", ""));
-      return {
-        segment_index: idx,
-        type: s.type || "narration",
-        text: mergedParagraphs[idx] || "",
-        character: s.character || null,
-        emotion: s.emotion || null,
-      };
-    });
-    allSegments = allSegments.concat(segs);
-  }
-
-  // Merge adjacent narration segments that are very short (< 80 chars)
-  const final: any[] = [];
-  let buffer = { type: "narration", text: "", emotion: "", character: null as string | null };
-  for (const s of allSegments) {
-    if (s.type === "narration" && (!s.character || s.character === "")) {
-      if (buffer.text && buffer.text.length + s.text.length < 400) {
-        buffer.text += "\n" + s.text;
-      } else if (buffer.text) {
-        final.push({ ...buffer });
-        buffer = { type: "narration", text: s.text, emotion: s.emotion || "", character: null };
-      } else {
-        buffer = { type: "narration", text: s.text, emotion: s.emotion || "", character: null };
-      }
-    } else {
-      if (buffer.text) { final.push({ ...buffer }); buffer.text = ""; }
-      final.push({ type: s.type, text: s.text, emotion: s.emotion || "", character: s.character || null });
-    }
-  }
-  if (buffer.text) final.push({ ...buffer });
-
-  // Save segments
-  const insertSeg = db.prepare(
-    `INSERT OR REPLACE INTO chapter_segments (chapter_id, segment_index, type, character_id, text, emotion)
-     VALUES (?, ?, ?, ?, ?, ?)`
-  );
-
-  const charMap = new Map<string, number>();
-  for (const c of characters) {
-    charMap.set(c.name, c.id);
-    if (c.aliases) {
-      try { for (const a of JSON.parse(c.aliases)) charMap.set(a, c.id); } catch {}
-    }
-  }
-
-  const insertAll = db.transaction(() => {
-    for (let i = 0; i < final.length; i++) {
-      const s = final[i];
-      const charId = s.character ? (charMap.get(s.character) || null) : null;
-      insertSeg.run(chapterId, i, s.type, charId, s.text, s.emotion || null);
-    }
-  });
-
-  insertAll();
-
-  db.prepare("UPDATE chapters SET analysis_status = 'done' WHERE id = ?").run(chapterId);
+interface DirectorScene {
+  text: string;
+  speaker: string | null;
+  voice_style: string;
+  emotion: string;
 }
 
-export async function synthesizeSegment(
-  chapterId: number,
-  segmentIndex: number,
-  text: string,
-  characterId: number | null,
-  emotion: string | null,
-  voiceId: string
-): Promise<{ audioPath: string; base64: string }> {
-  const db = getDb();
+const CHAPTER_AUDIO_DIR = path.join(process.cwd(), "data", "chapter-audio");
 
-  // Check cache
-  const cached = db.prepare(
-    "SELECT * FROM audio_cache WHERE chapter_id = ? AND segment_index = ?"
-  ).get(chapterId, segmentIndex) as { audio_path: string } | undefined;
+// Emotion tag mapping for TTS inline tags
+const EMOTION_TAG_MAP: Record<string, string> = {
+  "开心": "开心", "悲伤": "悲伤", "生气": "愤怒", "轻声": "轻声",
+  "急促": "语速加快", "疲惫": "疲惫", "温和": "温柔", "严肃": "严肃",
+  "耳语": "轻声", "惊讶": "惊讶", "兴奋": "兴奋", "平静": "平静",
+  "紧张": "紧张", "沉稳": "",
+};
 
-  if (cached && fs.existsSync(cached.audio_path)) {
-    const audioBuffer = fs.readFileSync(cached.audio_path);
-    return { audioPath: cached.audio_path, base64: audioBuffer.toString("base64") };
-  }
-
-  // Build style tags
-  let styledText = text;
+function buildTtsTag(voiceStyle: string, emotion: string): string {
+  const parts: string[] = [];
+  if (voiceStyle) parts.push(voiceStyle);
   if (emotion) {
-    styledText = `<style>${emotion}</style>${styledText}`;
+    const mapped = emotion.split(/\s+/).map((e) => EMOTION_TAG_MAP[e] || e).filter(Boolean);
+    parts.push(...mapped);
   }
+  // Deduplicate
+  const unique = [...new Set(parts)];
+  return unique.length > 0 ? `(${unique.join(" ")})` : "";
+}
 
-  const apiKey = getApiKey();
+async function generateSceneAudio(
+  scene: DirectorScene,
+  baseVoice: string,
+  apiKey: string,
+  bookId: number,
+  sceneIndex: number,
+  tmpDir: string
+): Promise<string> {
+  const tag = buildTtsTag(scene.voice_style, scene.emotion);
+  const styledText = tag ? tag + scene.text : scene.text;
 
-  // TTS call with retry (max 3 attempts with exponential backoff)
+  const styleInstruction = "你是一个专业的有声书主播，正在为听众朗读一本小说。请用自然流畅、富有感情的语气朗读以下内容。";
+
   let res: Response | undefined;
   for (let retry = 0; retry < 3; retry++) {
     try {
       res = await fetch(`${MIMO_API_BASE}/chat/completions`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "api-key": apiKey,
-        },
+        headers: { "Content-Type": "application/json", "api-key": apiKey },
         body: JSON.stringify({
           model: "mimo-v2.5-tts",
           messages: [
-            { role: "assistant", content: "" },
-            { role: "user", content: styledText }
+            { role: "user", content: styleInstruction },
+            { role: "assistant", content: styledText },
           ],
-          audio: {
-            format: "mp3",
-            voice: voiceId,
-          },
+          audio: { format: "mp3", voice: baseVoice },
         }),
       });
       if (res.ok) break;
@@ -473,68 +358,231 @@ export async function synthesizeSegment(
     if (retry < 2) await new Promise((r) => setTimeout(r, 1000 * (retry + 1)));
   }
 
-  if (!res || !res.ok) throw new Error(`TTS API error: ${res?.status || "network"}`);
+  if (!res || !res.ok) throw new Error(`TTS scene ${sceneIndex} error: ${res?.status || "network"}`);
   const data = await res.json();
   const base64Audio = data.choices?.[0]?.message?.audio?.data;
-  if (!base64Audio) throw new Error("TTS response missing audio data");
+  if (!base64Audio) throw new Error(`TTS scene ${sceneIndex} missing audio`);
 
   const audioBuffer = Buffer.from(base64Audio, "base64");
-
-  // Get book_id for path
-  const chapter = db.prepare(
-    "SELECT c.book_id FROM chapters c WHERE c.id = ?"
-  ).get(chapterId) as { book_id: number };
-
-  const audioDir = path.join(process.cwd(), "data", "audio", String(chapter.book_id));
-  fs.mkdirSync(audioDir, { recursive: true });
-  const audioPath = path.join(audioDir, `${chapterId}_${segmentIndex}.mp3`);
-  fs.writeFileSync(audioPath, audioBuffer);
-
-  db.prepare(
-    `INSERT OR REPLACE INTO audio_cache (chapter_id, segment_index, audio_path, format, size_bytes)
-     VALUES (?, ?, ?, 'mp3', ?)`
-  ).run(chapterId, segmentIndex, audioPath, audioBuffer.length);
-
-  // Enforce cache limit (3GB per book)
-  enforceCacheLimit(chapter.book_id);
-
-  return { audioPath, base64: base64Audio };
+  const scenePath = path.join(tmpDir, `scene_${sceneIndex}.mp3`);
+  fs.writeFileSync(scenePath, audioBuffer);
+  return scenePath;
 }
 
-function enforceCacheLimit(bookId: number) {
+function concatScenes(scenePaths: string[], outputPath: string): void {
+  // MP3 frames are self-contained — simple Buffer.concat works for concatenation
+  const buffers = scenePaths.map((p) => fs.readFileSync(p));
+  const combined = Buffer.concat(buffers);
+  fs.writeFileSync(outputPath, combined);
+}
+
+function getAudioDuration(audioPath: string): number {
+  // Estimate: MP3 at ~128kbps = ~16KB/s. Rough estimate for progress bar.
+  const stat = fs.statSync(audioPath);
+  return Math.round((stat.size / 16000) * 1000);
+}
+
+interface SceneManifest {
+  scenes: {
+    path: string;
+    text: string;
+    speaker: string | null;
+    voice_style: string;
+    emotion: string;
+    duration_ms: number;
+  }[];
+  total_duration_ms: number;
+}
+
+function enforceChapterCacheLimit(bookId: number) {
   const db = getDb();
-  const maxBytes = 3 * 1024 * 1024 * 1024; // 3GB
+  const maxBytes = 3 * 1024 * 1024 * 1024; // 3GB per book
   const result = db.prepare(
-    `SELECT COALESCE(SUM(ac.size_bytes), 0) as total
-     FROM audio_cache ac
-     JOIN chapters c ON c.id = ac.chapter_id
+    `SELECT COALESCE(SUM(ca.size_bytes), 0) as total
+     FROM chapter_audio ca
+     JOIN chapters c ON c.id = ca.chapter_id
      WHERE c.book_id = ?`
   ).get(bookId) as { total: number };
 
   let total = result.total;
   if (total > maxBytes) {
     const oldest = db.prepare(
-      `SELECT ac.id, ac.audio_path, ac.size_bytes
-       FROM audio_cache ac
-       JOIN chapters c ON c.id = ac.chapter_id
+      `SELECT ca.id, ca.audio_path, ca.size_bytes
+       FROM chapter_audio ca
+       JOIN chapters c ON c.id = ca.chapter_id
        WHERE c.book_id = ?
-       ORDER BY ac.created_at ASC`
+       ORDER BY ca.created_at ASC`
     ).all(bookId) as { id: number; audio_path: string; size_bytes: number }[];
 
     for (const row of oldest) {
       if (total <= maxBytes * 0.8) break;
-      db.prepare("DELETE FROM audio_cache WHERE id = ?").run(row.id);
+      db.prepare("DELETE FROM chapter_audio WHERE id = ?").run(row.id);
       if (fs.existsSync(row.audio_path)) fs.unlinkSync(row.audio_path);
       total -= row.size_bytes;
     }
   }
 }
 
-export function saveProgress(bookId: number, chapterIndex: number, segmentIndex: number) {
+export async function generateChapterAudio(chapterId: number): Promise<{ audioPath: string; durationMs: number } | null> {
+  const db = getDb();
+  const chapter = db.prepare("SELECT * FROM chapters WHERE id = ?").get(chapterId) as Chapter | undefined;
+  if (!chapter) throw new Error("章节不存在");
+
+  // Check if already ready
+  const existing = db.prepare("SELECT * FROM chapter_audio WHERE chapter_id = ? AND status = 'ready'").get(chapterId) as any;
+  if (existing && fs.existsSync(existing.audio_path)) {
+    return { audioPath: existing.audio_path, durationMs: existing.duration_ms || 0 };
+  }
+
+  // Set status to generating
+  db.prepare(
+    `INSERT INTO chapter_audio (chapter_id, audio_path, status) VALUES (?, '', 'generating')
+     ON CONFLICT(chapter_id) DO UPDATE SET status = 'generating', error_message = null`
+  ).run(chapterId);
+
+  const apiKey = getApiKey();
+  const book = db.prepare("SELECT * FROM books WHERE id = ?").get(chapter.book_id) as any;
+  const characters = db.prepare(
+    "SELECT c.name, cv.mimo_voice_id FROM characters c LEFT JOIN character_voices cv ON cv.character_id = c.id WHERE c.book_id = ?"
+  ).all(chapter.book_id) as any[];
+
+  // Determine base narration voice
+  const baseVoice = book?.narrator_voice || "白桦";
+
+  // Build character context for director
+  const charContext = characters.length > 0
+    ? "角色列表：" + characters.map((c: any) => `${c.name}(${c.mimo_voice_id || "未知声线"})`).join("、")
+    : "";
+
+  try {
+    // === Phase 1: LLM Director ===
+    // Batch chapter content if too long (>6000 chars)
+    const maxBatchSize = 6000;
+    let allScenes: DirectorScene[] = [];
+
+    for (let batchStart = 0; batchStart < chapter.content.length; batchStart += maxBatchSize) {
+      const batchText = chapter.content.slice(batchStart, batchStart + maxBatchSize);
+
+      const directorPrompt = `你是一个有声剧导演。分析以下小说片段，将文本切分为演绎场景（scenes），为每个场景标注声音演绎指令。
+
+规则：
+1. 保持原文完全不变，每个场景的text必须是原文的连续片段
+2. 场景长度建议 200-500 字，对话可以更短，旁白可以稍长
+3. 标注每个场景的 voice_style（声音风格）和 emotion（情绪）
+4. 如果是对话，标注 speaker（说话角色名）；旁白 speaker 为 null
+
+声音风格可选：少年音、少女音、御姐音、大叔音、老年音（旁白用空字符串）
+情绪可选：开心、悲伤、愤怒、紧张、轻声、急促、严肃、温柔、惊讶、平静、疲惫（最多2个用空格分隔，旁白可用 沉稳）
+
+${charContext}
+
+小说片段：
+${batchText}
+
+只输出JSON：
+{"scenes": [{"text": "原文片段", "speaker": "角色名或null", "voice_style": "声音风格或空", "emotion": "情绪标签"}]}`;
+
+      const result = await callMiMoPro([{ role: "user", content: directorPrompt }]);
+      const scenes: DirectorScene[] = (result.scenes || []).map((s: any) => ({
+        text: s.text || "",
+        speaker: s.speaker || null,
+        voice_style: s.voice_style || "",
+        emotion: s.emotion || "",
+      }));
+      allScenes = allScenes.concat(scenes);
+    }
+
+    if (allScenes.length === 0) {
+      // Fallback: treat whole chapter as one narration scene
+      allScenes = [{ text: chapter.content, speaker: null, voice_style: "", emotion: "沉稳" }];
+    }
+
+    // === Phase 2: TTS per scene ===
+    const sceneDir = path.join(CHAPTER_AUDIO_DIR, String(chapterId));
+    fs.mkdirSync(sceneDir, { recursive: true });
+
+    const manifest: SceneManifest = { scenes: [], total_duration_ms: 0 };
+    for (let i = 0; i < allScenes.length; i++) {
+      const tmpDir = path.join(sceneDir, "tmp");
+      fs.mkdirSync(tmpDir, { recursive: true });
+      const tmpPath = await generateSceneAudio(allScenes[i], baseVoice, apiKey, chapter.book_id, i, tmpDir);
+
+      // Move to permanent location
+      const permPath = path.join(sceneDir, `scene_${i}.mp3`);
+      fs.renameSync(tmpPath, permPath);
+      try { fs.rmSync(tmpDir, { recursive: true }); } catch {}
+
+      const dur = getAudioDuration(permPath);
+      manifest.scenes.push({
+        path: permPath,
+        text: allScenes[i].text,
+        speaker: allScenes[i].speaker,
+        voice_style: allScenes[i].voice_style,
+        emotion: allScenes[i].emotion,
+        duration_ms: dur,
+      });
+      manifest.total_duration_ms += dur;
+    }
+
+    // Save manifest to database (use first scene path as audio_path for compat)
+    db.prepare(
+      `UPDATE chapter_audio SET audio_path = ?, format = 'mp3', duration_ms = ?, size_bytes = ?, scene_script = ?, status = 'ready', error_message = null
+       WHERE chapter_id = ?`
+    ).run(manifest.scenes[0]?.path || "", manifest.total_duration_ms, 0, JSON.stringify(manifest), chapterId);
+
+    // Update chapter analysis status
+    db.prepare("UPDATE chapters SET analysis_status = 'done' WHERE id = ?").run(chapterId);
+
+    enforceChapterCacheLimit(chapter.book_id);
+
+    return { audioPath: manifest.scenes[0]?.path || "", durationMs: manifest.total_duration_ms };
+  } catch (e: any) {
+    db.prepare(
+      `UPDATE chapter_audio SET status = 'error', error_message = ? WHERE chapter_id = ?`
+    ).run(e.message, chapterId);
+    throw e;
+  }
+}
+
+export function getChapterAudioStatus(chapterId: number): { status: string; audioPath: string | null; durationMs: number; sceneManifest: any } {
+  const db = getDb();
+  const row = db.prepare("SELECT status, audio_path, duration_ms, scene_script FROM chapter_audio WHERE chapter_id = ?").get(chapterId) as any;
+  if (!row) return { status: "pending", audioPath: null, durationMs: 0, sceneManifest: null };
+  let sceneManifest: any = null;
+  if (row.scene_script) {
+    try { sceneManifest = JSON.parse(row.scene_script); } catch {}
+  }
+  return { status: row.status, audioPath: row.audio_path, durationMs: row.duration_ms || 0, sceneManifest };
+}
+
+export function getSceneAudioPath(chapterId: number, sceneIndex: number): string | null {
+  const status = getChapterAudioStatus(chapterId);
+  if (!status.sceneManifest?.scenes?.[sceneIndex]) return null;
+  return status.sceneManifest.scenes[sceneIndex].path;
+}
+
+export async function maybePreloadNextChapter(bookId: number, currentChapterIdx: number) {
+  const db = getDb();
+  const nextChapter = db.prepare(
+    "SELECT id FROM chapters WHERE book_id = ? AND \"index\" = ?"
+  ).get(bookId, currentChapterIdx + 1) as { id: number } | undefined;
+
+  if (!nextChapter) return;
+
+  const status = getChapterAudioStatus(nextChapter.id);
+  if (status.status === "pending") {
+    // Fire and forget — don't block the response
+    generateChapterAudio(nextChapter.id).catch((e) =>
+      console.error(`Preload chapter ${currentChapterIdx + 1} failed:`, e)
+    );
+  }
+}
+
+export function saveProgress(bookId: number, chapterIndex: number, positionMs: number) {
   const db = getDb();
   db.prepare(
-    `INSERT INTO reading_progress (book_id, chapter_index, segment_index, updated_at)
+    `INSERT INTO reading_progress (book_id, chapter_index, position_ms, updated_at)
      VALUES (?, ?, ?, datetime('now'))
-     ON CONFLICT(book_id) DO UPDATE SET chapter_index = ?, segment_index = ?, updated_at = datetime('now')`
-  ).run(bookId, chapterIndex, segmentIndex, chapterIndex, segmentIndex);
+     ON CONFLICT(book_id) DO UPDATE SET chapter_index = ?, position_ms = ?, updated_at = datetime('now')`
+  ).run(bookId, chapterIndex, positionMs, chapterIndex, positionMs);
 }

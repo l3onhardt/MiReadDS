@@ -95,11 +95,25 @@ function initSchema(db: Database.Database) {
     );
     CREATE INDEX IF NOT EXISTS idx_audio_chapter ON audio_cache(chapter_id);
 
+    CREATE TABLE IF NOT EXISTS chapter_audio (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      chapter_id INTEGER UNIQUE NOT NULL REFERENCES chapters(id) ON DELETE CASCADE,
+      audio_path TEXT NOT NULL,
+      format TEXT DEFAULT 'mp3',
+      duration_ms INTEGER,
+      size_bytes INTEGER,
+      scene_script TEXT,
+      status TEXT DEFAULT 'pending' CHECK(status IN ('pending','generating','ready','error')),
+      error_message TEXT,
+      created_at DATETIME DEFAULT (datetime('now'))
+    );
+    CREATE INDEX IF NOT EXISTS idx_chapter_audio_status ON chapter_audio(status);
+
     CREATE TABLE IF NOT EXISTS reading_progress (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       book_id INTEGER UNIQUE NOT NULL REFERENCES books(id) ON DELETE CASCADE,
-      chapter_index INTEGER,
-      segment_index INTEGER,
+      chapter_index INTEGER DEFAULT 0,
+      position_ms INTEGER DEFAULT 0,
       updated_at DATETIME DEFAULT (datetime('now'))
     );
 
@@ -110,6 +124,17 @@ function initSchema(db: Database.Database) {
       updated_at DATETIME DEFAULT (datetime('now'))
     );
   `);
+
+  // Migration: add position_ms if old schema has segment_index
+  try {
+    const cols = db.prepare("PRAGMA table_info(reading_progress)").all() as { name: string }[];
+    if (cols.some((c) => c.name === "segment_index") && !cols.some((c) => c.name === "position_ms")) {
+      db.exec(`
+        ALTER TABLE reading_progress ADD COLUMN position_ms INTEGER DEFAULT 0;
+        UPDATE reading_progress SET position_ms = 0;
+      `);
+    }
+  } catch {}
 }
 
 export { getDb };

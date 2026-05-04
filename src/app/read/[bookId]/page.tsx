@@ -4,32 +4,57 @@ import { useParams } from "next/navigation";
 import { PlayerBar } from "@/components/PlayerBar";
 import { ReadingContent } from "@/components/ReadingContent";
 import { CharacterPanel } from "@/components/CharacterPanel";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, List } from "lucide-react";
 import Link from "next/link";
 
-interface Segment {
-  id: number;
-  segment_index: number;
-  type: "narration" | "dialogue";
-  character_id: number | null;
+interface SceneInfo {
+  path: string;
   text: string;
-  emotion: string | null;
+  speaker: string | null;
+  voice_style: string;
+  emotion: string;
+  duration_ms: number;
+}
+
+interface SceneManifest {
+  scenes: SceneInfo[];
+  total_duration_ms: number;
+}
+
+interface ChapterInfo {
+  id: number;
+  index: number;
+  title: string | null;
+  content: string;
+  analysis_status: string;
 }
 
 export default function ReaderPage() {
   const { bookId } = useParams<{ bookId: string }>();
   const [book, setBook] = useState<any>(null);
   const [currentChapterIdx, setCurrentChapterIdx] = useState(0);
-  const [segments, setSegments] = useState<Segment[]>([]);
-  const [activeSegment, setActiveSegment] = useState(0);
+  const [manifest, setManifest] = useState<SceneManifest | null>(null);
+  const [audioStatus, setAudioStatus] = useState("pending");
   const [isPlaying, setIsPlaying] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
-  const [characterSheetOpen, setCharacterSheetOpen] = useState(false);
   const [speed, setSpeed] = useState(1);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [characterSheetOpen, setCharacterSheetOpen] = useState(false);
+  const [chapterListOpen, setChapterListOpen] = useState(false);
 
-  // Load book data
+  const [currentSceneIdx, setCurrentSceneIdx] = useState(0);
+  const [sceneTimeMs, setSceneTimeMs] = useState(0);
+  const [totalTimeMs, setTotalTimeMs] = useState(0);
+
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const preloadAudioRef = useRef<HTMLAudioElement>(null);
+  const endedGuard = useRef(false);
+  const preloadTriggered = useRef(false);
+  const restorePos = useRef(0);
+  const totalDurationMs = manifest?.total_duration_ms || 0;
+  const positionPct = totalDurationMs > 0 ? totalTimeMs / totalDurationMs : 0;
+
+  const currentChapter: ChapterInfo | undefined = book?.chapters?.[currentChapterIdx];
+
+  // Load book
   useEffect(() => {
     fetch(`/api/books/${bookId}`)
       .then((r) => r.json())
@@ -37,181 +62,315 @@ export default function ReaderPage() {
         setBook(data);
         const prog = data.progress;
         if (prog) {
-          setCurrentChapterIdx(prog.chapter_index);
-          setActiveSegment(prog.segment_index || 0);
+          setCurrentChapterIdx(prog.chapter_index || 0);
+          restorePos.current = prog.position_ms || 0;
         }
       });
   }, [bookId]);
 
-  // Load chapter segments
-  useEffect(() => {
-    if (!book) return;
-    const chapter = book.chapters[currentChapterIdx];
-    if (!chapter) return;
-    const chapterId = chapter.id;
+  // Play a specific scene
+  const playScene = useCallback((sceneIdx: number, startMs: number) => {
+    if (!manifest || !audioRef.current) return;
+    const scene = manifest.scenes[sceneIdx];
+    if (!scene) return;
 
-    async function loadSegments() {
-      // Trigger annotation if pending
-      if (chapter.analysis_status === "pending") {
-        await fetch("/api/analyze", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "annotate", chapterId }),
-        });
-        // Poll for completion
-        for (let i = 0; i < 15; i++) {
-          await new Promise((r) => setTimeout(r, 2000));
-          const cres = await fetch(`/api/books/${bookId}`);
-          const cdata = await cres.json();
-          if (cdata.chapters[currentChapterIdx]?.analysis_status === "done") break;
-        }
+    endedGuard.current = false;
+    const url = `/api/tts?chapterId=${currentChapter?.id}&scene=${sceneIdx}`;
+
+    const onLoaded = () => {
+      if (!audioRef.current) return;
+      if (startMs > 0) {
+        audioRef.current.currentTime = startMs / 1000;
       }
-      // Fetch segments
-      const sres = await fetch(`/api/books/${bookId}/segments?chapterId=${chapterId}`);
-      const segs = await sres.json();
-      setSegments(segs || []);
-      setActiveSegment(0);
+      audioRef.current.play().catch(() => {});
+      setIsPlaying(true);
+    };
+
+    audioRef.current.src = url;
+    audioRef.current.playbackRate = speed;
+    audioRef.current.addEventListener("canplay", onLoaded, { once: true });
+    audioRef.current.load();
+  }, [manifest, currentChapter, speed]);
+
+  // Advance to next scene or chapter
+  const advance = useCallback(() => {
+    if (endedGuard.current) return;
+    endedGuard.current = true;
+
+    if (!manifest) return;
+
+    if (currentSceneIdx < manifest.scenes.length - 1) {
+      // Next scene
+      const nextIdx = currentSceneIdx + 1;
+      setCurrentSceneIdx(nextIdx);
+      setSceneTimeMs(0);
+    } else {
+      // Next chapter
+      if (book && currentChapterIdx < book.chapters.length - 1) {
+        setCurrentChapterIdx((c) => c + 1);
+        setManifest(null);
+        setAudioStatus("pending");
+        setCurrentSceneIdx(0);
+        setSceneTimeMs(0);
+        setTotalTimeMs(0);
+      } else {
+        setIsPlaying(false);
+      }
     }
+  }, [manifest, currentSceneIdx, currentChapterIdx, book]);
 
-    loadSegments().catch(console.error);
-  }, [book, currentChapterIdx, bookId]);
+  // When scene changes, play it
+  useEffect(() => {
+    if (!manifest || audioStatus !== "ready") return;
+    if (!audioRef.current) return;
+    playScene(currentSceneIdx, 0);
+  }, [currentSceneIdx, manifest, audioStatus, playScene]);
 
-  // Play current segment
-  const playSegment = useCallback(async (segIdx: number) => {
-    if (!book || !segments[segIdx]) return;
-    const seg = segments[segIdx];
-    const chapterId = book.chapters[currentChapterIdx]?.id;
+  // Load chapter audio
+  const loadChapter = useCallback(async (chapterId: number) => {
+    preloadTriggered.current = false;
+    endedGuard.current = false;
+    setManifest(null);
+    setAudioStatus("pending");
+    setCurrentSceneIdx(0);
+    setSceneTimeMs(0);
+    setTotalTimeMs(0);
 
     try {
-      const res = await fetch("/api/tts", {
+      let res = await fetch("/api/tts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chapterId,
-          segmentIndex: seg.segment_index,
-          text: seg.text,
-          characterId: seg.character_id,
-          emotion: seg.emotion,
-        }),
+        body: JSON.stringify({ chapterId }),
       });
-      const data = await res.json();
-      if (data.base64 && audioRef.current) {
-        audioRef.current.src = `data:audio/mp3;base64,${data.base64}`;
-        audioRef.current.playbackRate = speed;
-        audioRef.current.play();
-        setIsPlaying(true);
+      let data = await res.json();
+
+      if (data.status === "generating") {
+        for (let i = 0; i < 60; i++) {
+          await new Promise((r) => setTimeout(r, 3000));
+          res = await fetch(`/api/tts?chapterId=${chapterId}`);
+          data = await res.json();
+          if (data.status === "ready" || data.status === "error") break;
+          setAudioStatus("generating");
+        }
+      }
+
+      if (data.status === "ready" && data.sceneManifest?.scenes?.length > 0) {
+        setManifest(data.sceneManifest);
+        setAudioStatus("ready");
+        if (restorePos.current > 0) {
+          const target = restorePos.current;
+          restorePos.current = 0;
+          // Find scene
+          let acc = 0;
+          let si = 0;
+          for (let i = 0; i < data.sceneManifest.scenes.length; i++) {
+            const dur = data.sceneManifest.scenes[i].duration_ms;
+            if (target < acc + dur) {
+              si = i;
+              break;
+            }
+            acc += dur;
+            si = i;
+          }
+          setCurrentSceneIdx(si);
+          setSceneTimeMs(target - acc);
+        }
+      } else {
+        setAudioStatus("error");
       }
     } catch (e) {
-      console.error("TTS error, skipping segment:", e);
-      if (segIdx < segments.length - 1) {
-        setActiveSegment((s) => s + 1);
+      console.error("Load chapter error:", e);
+      setAudioStatus("error");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!currentChapter) return;
+    loadChapter(currentChapter.id);
+  }, [currentChapter, loadChapter]);
+
+  // Update total position
+  useEffect(() => {
+    if (!manifest) return;
+    let acc = 0;
+    for (let i = 0; i < Math.min(currentSceneIdx, manifest.scenes.length); i++) {
+      acc += manifest.scenes[i].duration_ms;
+    }
+    setTotalTimeMs(acc + sceneTimeMs);
+  }, [manifest, currentSceneIdx, sceneTimeMs]);
+
+  // Preload next scene
+  useEffect(() => {
+    if (!manifest || !preloadAudioRef.current || !isPlaying) return;
+    const nextIdx = currentSceneIdx + 1;
+    if (nextIdx >= manifest.scenes.length) return;
+    const dur = manifest.scenes[currentSceneIdx]?.duration_ms || 0;
+    if (dur > 0 && sceneTimeMs / dur >= 0.8) {
+      preloadAudioRef.current.src = `/api/tts?chapterId=${currentChapter?.id}&scene=${nextIdx}`;
+      preloadAudioRef.current.load();
+    }
+  }, [sceneTimeMs, currentSceneIdx, manifest, isPlaying, currentChapter]);
+
+  // Preload next chapter at 30%
+  useEffect(() => {
+    if (!book || !currentChapter || preloadTriggered.current || totalDurationMs <= 0) return;
+    if (totalTimeMs / totalDurationMs >= 0.3) {
+      preloadTriggered.current = true;
+      const next = book.chapters[currentChapterIdx + 1];
+      if (next) {
+        fetch("/api/tts", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chapterId: next.id }),
+        }).catch(() => {});
       }
     }
-  }, [book, segments, currentChapterIdx, speed]);
-
-  // Advance on play
-  useEffect(() => {
-    if (isPlaying) playSegment(activeSegment);
-  }, [activeSegment, isPlaying]);
+  }, [totalTimeMs, totalDurationMs, book, currentChapter]);
 
   // Save progress
   useEffect(() => {
-    if (!book) return;
-    fetch("/api/books/progress", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ bookId: book.id, chapterIndex: currentChapterIdx, segmentIndex: activeSegment }),
-    }).catch(() => {});
-  }, [book, currentChapterIdx, activeSegment]);
+    if (!book || !isPlaying) return;
+    const interval = setInterval(() => {
+      fetch("/api/books/progress", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          bookId: book.id,
+          chapterIndex: currentChapterIdx,
+          positionMs: Math.round(totalTimeMs),
+        }),
+      }).catch(() => {});
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [book, currentChapterIdx, totalTimeMs, isPlaying]);
 
-  const handleAudioEnd = () => {
-    if (activeSegment < segments.length - 1) {
-      setActiveSegment((s) => s + 1);
-    } else {
-      setIsPlaying(false);
-    }
-  };
+  useEffect(() => {
+    if (audioRef.current) audioRef.current.playbackRate = speed;
+  }, [speed]);
 
-  // Swipe gestures
-  const touchStartX = useRef(0);
-  const handleTouchStart = (e: React.TouchEvent) => { touchStartX.current = e.touches[0].clientX; };
-  const handleTouchEnd = (e: React.TouchEvent) => {
-    const diff = touchStartX.current - e.changedTouches[0].clientX;
-    if (Math.abs(diff) > 80 && book) {
-      if (diff > 0 && currentChapterIdx < book.chapters.length - 1) {
-        setCurrentChapterIdx((c: number) => c + 1);
-      } else if (diff < 0 && currentChapterIdx > 0) {
-        setCurrentChapterIdx((c: number) => c - 1);
-      }
+  const handleTimeUpdate = () => {
+    if (audioRef.current) {
+      setSceneTimeMs(audioRef.current.currentTime * 1000);
     }
   };
 
   const togglePlay = () => {
-    if (!isPlaying) { setIsPlaying(true); }
-    else { audioRef.current?.pause(); setIsPlaying(false); }
+    if (!audioRef.current) return;
+    if (isPlaying) {
+      audioRef.current.pause();
+      setIsPlaying(false);
+    } else {
+      audioRef.current.play().catch(() => {});
+      setIsPlaying(true);
+    }
   };
 
-  const currentChapter = book?.chapters[currentChapterIdx];
-  const activeCharId = segments[activeSegment]?.character_id;
-  const activeChar = book?.characters?.find((c: any) => c.id === activeCharId);
+  const handleSeek = (ms: number) => {
+    if (!manifest) return;
+    let acc = 0;
+    for (let i = 0; i < manifest.scenes.length; i++) {
+      const dur = manifest.scenes[i].duration_ms;
+      if (ms < acc + dur) {
+        setCurrentSceneIdx(i);
+        setSceneTimeMs(0);
+        // Use playScene directly for seek
+        setTimeout(() => playScene(i, ms - acc), 0);
+        return;
+      }
+      acc += dur;
+    }
+  };
+
+  const goToChapter = (idx: number) => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.src = "";
+    }
+    setCurrentChapterIdx(idx);
+  };
 
   if (!book) return <div className="flex justify-center py-20" style={{ color: "var(--muted)" }}>加载中...</div>;
 
+  const currentSceneText = manifest?.scenes?.[currentSceneIdx]?.text || null;
+
   return (
     <div className="flex gap-4">
-      <div className="flex-1 min-w-0" onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
+      <div className="flex-1 min-w-0">
         <div className="flex items-center gap-3 mb-4">
           <Link href="/" className="flex-shrink-0" style={{ color: "var(--muted)" }}><ArrowLeft size={20} /></Link>
-          <div className="min-w-0"><h1 className="text-lg font-semibold truncate">{book.title}</h1></div>
+          <div className="min-w-0 flex-1"><h1 className="text-lg font-semibold truncate">{book.title}</h1></div>
+          <button onClick={() => setChapterListOpen(!chapterListOpen)}
+            className="flex-shrink-0 p-1.5 rounded-lg" style={{ color: "var(--muted)" }}>
+            <List size={20} />
+          </button>
         </div>
+
+        {chapterListOpen && (
+          <div className="glass p-3 mb-4 max-h-64 overflow-y-auto rounded-xl">
+            {book.chapters.map((ch: ChapterInfo, i: number) => (
+              <button key={ch.id}
+                onClick={() => { goToChapter(i); setChapterListOpen(false); }}
+                className="block w-full text-left px-3 py-2 rounded-lg text-sm transition-colors"
+                style={{
+                  backgroundColor: i === currentChapterIdx ? "var(--glass-bg)" : "transparent",
+                  color: i === currentChapterIdx ? "var(--accent)" : "var(--text)",
+                }}
+              >
+                {ch.title || `第${i + 1}章`}
+              </button>
+            ))}
+          </div>
+        )}
 
         <PlayerBar
           chapterTitle={currentChapter?.title || `第${currentChapterIdx + 1}章`}
-          currentSegment={activeSegment} totalSegments={segments.length} isPlaying={isPlaying}
+          chapterIdx={currentChapterIdx}
+          totalChapters={book.chapters.length}
+          isPlaying={isPlaying}
+          audioStatus={audioStatus}
           onTogglePlay={togglePlay}
-          onPrevSegment={() => activeSegment > 0 && setActiveSegment((s: number) => s - 1)}
-          onNextSegment={() => activeSegment < segments.length - 1 && setActiveSegment((s: number) => s + 1)}
-          currentTime={currentTime} duration={duration}
-          speakingCharacter={activeChar?.name || null}
-          speed={speed} onSpeedChange={setSpeed}
+          onPrevChapter={() => currentChapterIdx > 0 && goToChapter(currentChapterIdx - 1)}
+          onNextChapter={() => currentChapterIdx < book.chapters.length - 1 && goToChapter(currentChapterIdx + 1)}
+          currentTimeMs={totalTimeMs}
+          durationMs={totalDurationMs}
+          positionPercent={positionPct}
+          onSeek={handleSeek}
+          speed={speed}
+          onSpeedChange={setSpeed}
         />
 
-        {segments.length > 0 ? (
-          <ReadingContent
-            segments={segments.map((s: Segment) => ({
-              ...s,
-              character_name: book.characters?.find((c: any) => c.id === s.character_id)?.name || null,
-            }))}
-            activeSegmentIndex={activeSegment}
-          />
-        ) : (
-          <div className="glass p-8 text-center" style={{ color: "var(--muted)" }}>正在分析章节...</div>
-        )}
+        <ReadingContent
+          content={currentChapter?.content || ""}
+          currentSceneText={currentSceneText}
+          isPlaying={isPlaying}
+          audioStatus={audioStatus}
+        />
 
         <div className="flex justify-between mt-4">
-          <button onClick={() => setCurrentChapterIdx((c: number) => Math.max(0, c - 1))} disabled={currentChapterIdx === 0}
+          <button onClick={() => goToChapter(Math.max(0, currentChapterIdx - 1))} disabled={currentChapterIdx === 0}
             className="text-sm px-3 py-1.5 rounded-lg disabled:opacity-30" style={{ color: "var(--muted)" }}>
-            ← 上一章
+            上一章
           </button>
           <span className="text-sm" style={{ color: "var(--muted)" }}>{currentChapterIdx + 1} / {book.chapters.length}</span>
-          <button onClick={() => setCurrentChapterIdx((c: number) => Math.min(book.chapters.length - 1, c + 1))} disabled={currentChapterIdx === book.chapters.length - 1}
+          <button onClick={() => goToChapter(Math.min(book.chapters.length - 1, currentChapterIdx + 1))} disabled={currentChapterIdx === book.chapters.length - 1}
             className="text-sm px-3 py-1.5 rounded-lg disabled:opacity-30" style={{ color: "var(--accent)" }}>
-            下一章 →
+            下一章
           </button>
         </div>
       </div>
 
       <CharacterPanel
         characters={(book.characters || []).map((c: any) => ({ id: c.id, name: c.name, voice_name: c.voice_name, role_type: c.role_type || "supporting" }))}
-        activeCharacterName={activeChar?.name || null}
+        activeCharacterName={manifest?.scenes?.[currentSceneIdx]?.speaker || null}
         isOpen={characterSheetOpen} onToggle={() => setCharacterSheetOpen(!characterSheetOpen)}
       />
 
-      <audio ref={audioRef} onEnded={handleAudioEnd}
-        onTimeUpdate={(e) => setCurrentTime((e.target as HTMLAudioElement).currentTime * 1000)}
-        onLoadedMetadata={(e) => setDuration((e.target as HTMLAudioElement).duration * 1000)}
+      <audio ref={audioRef}
+        onEnded={advance}
+        onTimeUpdate={handleTimeUpdate}
         className="hidden"
       />
+      <audio ref={preloadAudioRef} className="hidden" />
     </div>
   );
 }

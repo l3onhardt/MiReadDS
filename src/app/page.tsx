@@ -21,7 +21,7 @@ export default function BookshelfPage() {
   useEffect(() => {
     fetch("/api/books")
       .then((r) => r.json())
-      .then((data) => { setBooks(data); setLoading(false); })
+      .then((data) => { setBooks(Array.isArray(data) ? data : []); setLoading(false); })
       .catch(() => setLoading(false));
   }, []);
 

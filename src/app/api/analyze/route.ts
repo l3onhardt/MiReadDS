@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { scanCharacters, annotateChapter } from "@/lib/services";
+import { scanCharacters, generateChapterAudio, getChapterAudioStatus } from "@/lib/services";
 
 export async function POST(req: NextRequest) {
   try {
@@ -10,9 +10,17 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true });
     }
 
-    if (action === "annotate" && chapterId) {
-      await annotateChapter(chapterId);
-      return NextResponse.json({ ok: true });
+    if (action === "generate" && chapterId) {
+      // Fire and forget — client polls for status
+      generateChapterAudio(chapterId).catch((e) =>
+        console.error("Chapter audio generation failed:", e)
+      );
+      return NextResponse.json({ ok: true, status: "generating" });
+    }
+
+    if (action === "status" && chapterId) {
+      const status = getChapterAudioStatus(chapterId);
+      return NextResponse.json(status);
     }
 
     return NextResponse.json({ error: "Invalid action or missing params" }, { status: 400 });
