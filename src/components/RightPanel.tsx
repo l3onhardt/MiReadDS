@@ -42,9 +42,9 @@ export function RightPanel({
 
   return (
     <div className="w-full">
-      <div className="glass p-3 sticky top-2 h-[calc(100vh-1rem)] flex flex-col gap-2 overflow-hidden">
-        {/* Chapter list */}
-        <div className="flex flex-col flex-1 min-h-0">
+      <div className="glass p-3 sticky top-2 max-h-[calc(100vh-1rem)] flex flex-col gap-2 overflow-hidden">
+        {/* Chapter list — sized to content, capped at 60vh */}
+        <div className="flex flex-col min-h-0">
           <button
             onClick={() => setChaptersOpen(!chaptersOpen)}
             className="flex items-center gap-1 w-full text-left mb-2 flex-shrink-0"
@@ -58,7 +58,7 @@ export function RightPanel({
             </span>
           </button>
           {chaptersOpen && (
-            <div className="flex-1 overflow-y-auto space-y-0.5 min-h-0">
+            <div className="overflow-y-auto space-y-0.5" style={{ maxHeight: "60vh" }}>
               {chapters.map((ch, i) => (
                 <button
                   key={ch.id}
@@ -80,8 +80,8 @@ export function RightPanel({
 
         <hr className="flex-shrink-0" style={{ borderColor: "var(--glass-border)" }} />
 
-        {/* Paragraph jump list — flex-1 fills remaining height */}
-        <div className="flex flex-col flex-1 min-h-0">
+        {/* Paragraph jump list — sized to content, capped at 30vh */}
+        <div className="flex flex-col min-h-0">
           <button
             onClick={() => setParagraphsOpen(!paragraphsOpen)}
             className="flex items-center gap-1 w-full text-left mb-2 flex-shrink-0"
@@ -95,7 +95,7 @@ export function RightPanel({
             </span>
           </button>
           {paragraphsOpen && (
-            <div className="flex-1 overflow-y-auto space-y-0.5 min-h-0">
+            <div className="overflow-y-auto space-y-0.5" style={{ maxHeight: "30vh" }}>
               {paragraphs.map((p, i) => {
                 const isCurrent = i === currentParaIdx;
                 const preview = p.length > 30 ? p.slice(0, 30) + "…" : p;
