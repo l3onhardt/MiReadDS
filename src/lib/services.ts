@@ -502,65 +502,97 @@ ${batchText}
       allScenes = [{ text: chapter.content, speaker: null, voice_style: "", emotion: "沉稳" }];
     }
 
-    // === Phase 2: TTS per scene (parallel with concurrency limit) ===
+    // Save the full scene plan (without audio paths) to DB first
+    const initialManifest = {
+      scenes: allScenes.map((s) => ({
+        path: "",
+        text: s.text,
+        speaker: s.speaker,
+        voice_style: s.voice_style,
+        emotion: s.emotion,
+        duration_ms: 0,
+      })),
+      total_duration_ms: 0,
+      total_scenes: allScenes.length,
+      generated_scenes: 0,
+    };
+    db.prepare(
+      `UPDATE chapter_audio SET size_bytes = 50, scene_script = ? WHERE chapter_id = ?`
+    ).run(JSON.stringify(initialManifest), chapterId);
+
+    // === Phase 2: TTS generation (first batch → mark ready, rest in background) ===
     const sceneDir = path.join(CHAPTER_AUDIO_DIR, String(chapterId));
     fs.mkdirSync(sceneDir, { recursive: true });
 
     const totalScenes = allScenes.length;
-
-    // Generate scenes in parallel batches of 5
     const CONCURRENCY = 5;
-    const sceneResults: { index: number; path: string; duration_ms: number }[] = [];
+    const chapterBookId = chapter.book_id;
+    const FIRST_BATCH_SIZE = Math.min(10, totalScenes); // Generate at least 10 scenes before ready
 
-    for (let batchStart = 0; batchStart < totalScenes; batchStart += CONCURRENCY) {
-      const batch = allScenes.slice(batchStart, batchStart + CONCURRENCY);
-      const batchPromises = batch.map(async (scene, offset) => {
+    // Generate a single batch of scenes
+    async function generateBatch(batchStart: number, count: number): Promise<{ index: number; path: string; duration_ms: number }[]> {
+      const batch = allScenes.slice(batchStart, batchStart + count);
+      const promises = batch.map(async (scene, offset) => {
         const i = batchStart + offset;
         const tmpDir = path.join(sceneDir, `tmp_${i}`);
         fs.mkdirSync(tmpDir, { recursive: true });
-        const tmpPath = await generateSceneAudio(scene, baseVoice, apiKey, chapter.book_id, i, tmpDir);
+        const tmpPath = await generateSceneAudio(scene, baseVoice, apiKey, chapterBookId, i, tmpDir);
         const permPath = path.join(sceneDir, `scene_${i}.mp3`);
         fs.renameSync(tmpPath, permPath);
         try { fs.rmSync(tmpDir, { recursive: true }); } catch {}
-        const dur = getAudioDuration(permPath);
-        return { index: i, path: permPath, duration_ms: dur };
+        return { index: i, path: permPath, duration_ms: getAudioDuration(permPath) };
       });
-
-      const batchResults = await Promise.all(batchPromises);
-      sceneResults.push(...batchResults);
-
-      // Update progress: 50 + (progress * 50) = 50-100
-      const progress = Math.round(50 + (batchStart + batch.length) / totalScenes * 50);
-      db.prepare("UPDATE chapter_audio SET size_bytes = ? WHERE chapter_id = ?")
-        .run(progress, chapterId);
+      return Promise.all(promises);
     }
 
-    sceneResults.sort((a, b) => a.index - b.index);
-
-    const manifest: SceneManifest = { scenes: [], total_duration_ms: 0 };
-    for (const r of sceneResults) {
-      const scene = allScenes[r.index];
-      manifest.scenes.push({
-        path: r.path,
-        text: scene.text,
-        speaker: scene.speaker,
-        voice_style: scene.voice_style,
-        emotion: scene.emotion,
-        duration_ms: r.duration_ms,
-      });
-      manifest.total_duration_ms += r.duration_ms;
+    function saveManifest(generatedResults: { index: number; path: string; duration_ms: number }[]) {
+      // Read current manifest, update paths, save
+      const row = db.prepare("SELECT scene_script FROM chapter_audio WHERE chapter_id = ?").get(chapterId) as any;
+      const current: any = row?.scene_script ? JSON.parse(row.scene_script) : initialManifest;
+      for (const r of generatedResults) {
+        if (current.scenes[r.index]) {
+          current.scenes[r.index].path = r.path;
+          current.scenes[r.index].duration_ms = r.duration_ms;
+        }
+      }
+      current.generated_scenes = current.scenes.filter((s: any) => s.path).length;
+      current.total_duration_ms = current.scenes.reduce((sum: number, s: any) => sum + (s.duration_ms || 0), 0);
+      const progress = Math.round(50 + (current.generated_scenes / totalScenes) * 50);
+      db.prepare(
+        `UPDATE chapter_audio SET audio_path = ?, duration_ms = ?, size_bytes = ?, scene_script = ? WHERE chapter_id = ?`
+      ).run(current.scenes.find((s: any) => s.path)?.path || "", current.total_duration_ms, progress, JSON.stringify(current), chapterId);
+      return current;
     }
 
-    // Save manifest
+    // Generate first batch (blocking — client needs this to start playing)
+    const firstResults = await generateBatch(0, FIRST_BATCH_SIZE);
+    const firstManifest = saveManifest(firstResults);
+
+    // Mark as ready — client can start playing
     db.prepare(
-      `UPDATE chapter_audio SET audio_path = ?, format = 'mp3', duration_ms = ?, size_bytes = ?, scene_script = ?, status = 'ready', error_message = null
-       WHERE chapter_id = ?`
-    ).run(manifest.scenes[0]?.path || "", manifest.total_duration_ms, 100, JSON.stringify(manifest), chapterId);
-
+      `UPDATE chapter_audio SET status = 'ready', error_message = null WHERE chapter_id = ?`
+    ).run(chapterId);
     db.prepare("UPDATE chapters SET analysis_status = 'done' WHERE id = ?").run(chapterId);
-    enforceChapterCacheLimit(chapter.book_id);
 
-    return { audioPath: manifest.scenes[0]?.path || "", durationMs: manifest.total_duration_ms };
+    // Continue generating remaining scenes in background (don't await)
+    const bgChapterId = chapterId;
+    (async () => {
+      try {
+        let allResults = [...firstResults];
+        for (let batchStart = FIRST_BATCH_SIZE; batchStart < totalScenes; batchStart += CONCURRENCY) {
+          const count = Math.min(CONCURRENCY, totalScenes - batchStart);
+          const batchResults = await generateBatch(batchStart, count);
+          allResults = allResults.concat(batchResults);
+          saveManifest(allResults);
+        }
+        db.prepare("UPDATE chapter_audio SET size_bytes = 100 WHERE chapter_id = ?").run(bgChapterId);
+        enforceChapterCacheLimit(chapterBookId);
+      } catch (e) {
+        console.error(`Background generation for chapter ${bgChapterId} failed:`, e);
+      }
+    })();
+
+    return { audioPath: firstManifest.scenes.find((s: any) => s.path)?.path || "", durationMs: firstManifest.total_duration_ms };
   } catch (e: any) {
     try {
       db.prepare("UPDATE chapter_audio SET status = 'error', error_message = ? WHERE chapter_id = ?")

@@ -19,6 +19,8 @@ interface SceneInfo {
 interface SceneManifest {
   scenes: SceneInfo[];
   total_duration_ms: number;
+  total_scenes?: number;
+  generated_scenes?: number;
 }
 
 interface ChapterInfo {
@@ -69,11 +71,57 @@ export default function ReaderPage() {
       });
   }, [bookId]);
 
-  // Play a specific scene
-  const playScene = useCallback((sceneIdx: number, startMs: number) => {
+  // Advance to next scene or chapter
+  const advance = useCallback(() => {
+    if (endedGuard.current) return;
+    endedGuard.current = true;
+
+    if (!manifest) return;
+
+    if (currentSceneIdx < manifest.scenes.length - 1) {
+      setCurrentSceneIdx((s) => s + 1);
+      setSceneTimeMs(0);
+    } else {
+      if (book && currentChapterIdx < book.chapters.length - 1) {
+        setCurrentChapterIdx((c) => c + 1);
+        setManifest(null);
+        setAudioStatus("pending");
+        setGenProgress(0);
+        setCurrentSceneIdx(0);
+        setSceneTimeMs(0);
+        setTotalTimeMs(0);
+      } else {
+        setIsPlaying(false);
+      }
+    }
+  }, [manifest, currentSceneIdx, currentChapterIdx, book]);
+
+  // Play a specific scene — waits if scene not yet generated
+  const playScene = useCallback(async (sceneIdx: number, startMs: number) => {
     if (!manifest || !audioRef.current) return;
-    const scene = manifest.scenes[sceneIdx];
+    let scene = manifest.scenes[sceneIdx];
     if (!scene) return;
+
+    // If scene audio not ready yet, poll manifest until it is
+    if (!scene.path && currentChapter) {
+      for (let i = 0; i < 60; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const res = await fetch(`/api/tts?chapterId=${currentChapter.id}`);
+        const data = await res.json();
+        if (data.sceneManifest) {
+          setManifest(data.sceneManifest);
+          setGenProgress(data.progress || 0);
+          scene = data.sceneManifest.scenes[sceneIdx];
+          if (scene?.path) break;
+        }
+      }
+    }
+
+    if (!scene?.path) {
+      console.warn("Scene not available, skipping:", sceneIdx);
+      advance();
+      return;
+    }
 
     endedGuard.current = false;
     const url = `/api/tts?chapterId=${currentChapter?.id}&scene=${sceneIdx}`;
@@ -91,41 +139,32 @@ export default function ReaderPage() {
     audioRef.current.playbackRate = speed;
     audioRef.current.addEventListener("canplay", onLoaded, { once: true });
     audioRef.current.load();
-  }, [manifest, currentChapter, speed]);
-
-  // Advance to next scene or chapter
-  const advance = useCallback(() => {
-    if (endedGuard.current) return;
-    endedGuard.current = true;
-
-    if (!manifest) return;
-
-    if (currentSceneIdx < manifest.scenes.length - 1) {
-      // Next scene
-      const nextIdx = currentSceneIdx + 1;
-      setCurrentSceneIdx(nextIdx);
-      setSceneTimeMs(0);
-    } else {
-      // Next chapter
-      if (book && currentChapterIdx < book.chapters.length - 1) {
-        setCurrentChapterIdx((c) => c + 1);
-        setManifest(null);
-        setAudioStatus("pending");
-        setCurrentSceneIdx(0);
-        setSceneTimeMs(0);
-        setTotalTimeMs(0);
-      } else {
-        setIsPlaying(false);
-      }
-    }
-  }, [manifest, currentSceneIdx, currentChapterIdx, book]);
+  }, [manifest, currentChapter, speed, advance]);
 
   // When scene changes, play it
   useEffect(() => {
     if (!manifest || audioStatus !== "ready") return;
-    if (!audioRef.current) return;
     playScene(currentSceneIdx, 0);
   }, [currentSceneIdx, manifest, audioStatus, playScene]);
+
+  // Periodically refresh manifest while playing (to get newly generated scenes)
+  useEffect(() => {
+    if (!isPlaying || !currentChapter || !manifest) return;
+    const allGenerated = (manifest.generated_scenes || 0) >= (manifest.total_scenes || manifest.scenes.length);
+    if (allGenerated) return;
+
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/tts?chapterId=${currentChapter.id}`);
+        const data = await res.json();
+        if (data.sceneManifest) {
+          setManifest(data.sceneManifest);
+          setGenProgress(data.progress || 0);
+        }
+      } catch {}
+    }, 10000);
+    return () => clearInterval(interval);
+  }, [isPlaying, currentChapter, manifest]);
 
   // Load chapter audio
   const loadChapter = useCallback(async (chapterId: number) => {
