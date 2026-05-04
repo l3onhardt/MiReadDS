@@ -1,5 +1,5 @@
 "use client";
-import { useRef, useEffect } from "react";
+import { useRef, useEffect, useState } from "react";
 import { Loader2, Play } from "lucide-react";
 
 interface ReadingContentProps {
@@ -10,6 +10,12 @@ interface ReadingContentProps {
   onParagraphSeek: (paraIdx: number) => void;
 }
 
+// User scrolls manually -> pause auto-follow for this long, then resume.
+const RESUME_DELAY_MS = 30_000;
+// scrollIntoView({ behavior: "smooth" }) fires its own scroll events; ignore
+// them by checking elapsed time since the last auto-scroll we triggered.
+const PROGRAMMATIC_SCROLL_GRACE_MS = 1500;
+
 export function ReadingContent({
   paragraphs,
   currentParaIdx,
@@ -18,14 +24,35 @@ export function ReadingContent({
   onParagraphSeek,
 }: ReadingContentProps) {
   const activeRef = useRef<HTMLDivElement>(null);
+  const lastAutoScrollAt = useRef(0);
+  const resumeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [userInterrupted, setUserInterrupted] = useState(false);
 
-  // Auto-scroll page so the active paragraph stays in view.
-  // Triggers on currentParaIdx change (was currentSceneText) — O(1) and stable.
+  // Detect user-initiated scroll vs our programmatic scrollIntoView animation.
   useEffect(() => {
-    if (activeRef.current && currentParaIdx >= 0) {
-      activeRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
-    }
-  }, [currentParaIdx]);
+    const onScroll = () => {
+      if (Date.now() - lastAutoScrollAt.current < PROGRAMMATIC_SCROLL_GRACE_MS) return;
+      setUserInterrupted(true);
+      if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current);
+      resumeTimerRef.current = setTimeout(() => {
+        setUserInterrupted(false);
+      }, RESUME_DELAY_MS);
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => {
+      window.removeEventListener("scroll", onScroll);
+      if (resumeTimerRef.current) clearTimeout(resumeTimerRef.current);
+    };
+  }, []);
+
+  // Auto-scroll active paragraph into view.
+  // Skipped while userInterrupted; when interrupt expires this effect re-runs
+  // (deps include userInterrupted) and scrolls back to the current paragraph.
+  useEffect(() => {
+    if (currentParaIdx < 0 || !activeRef.current || userInterrupted) return;
+    lastAutoScrollAt.current = Date.now();
+    activeRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [currentParaIdx, userInterrupted]);
 
   const isGenerating = audioStatus === "generating" || audioStatus === "pending";
 
