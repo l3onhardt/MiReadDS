@@ -25,6 +25,7 @@ interface PlayerBarProps {
   onTimelineSeek?: (positionMs: number) => void;
   groupSize: number;
   onGroupSizeChange: (size: number) => void;
+  progressRatio?: number;
 }
 
 export function PlayerBar({
@@ -40,6 +41,7 @@ export function PlayerBar({
   onTimelineSeek,
   groupSize,
   onGroupSizeChange,
+  progressRatio,
 }: PlayerBarProps) {
   const isReady = audioStatus === "ready";
   const isGenerating = audioStatus === "generating" || audioStatus === "pending";
@@ -85,6 +87,7 @@ export function PlayerBar({
                 onTimelineSeek={onTimelineSeek}
                 groupSize={groupSize}
                 onGroupSizeChange={onGroupSizeChange}
+                progressRatio={progressRatio}
               />
             </div>
           )}

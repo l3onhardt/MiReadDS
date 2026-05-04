@@ -18,6 +18,7 @@ interface SceneTimelineProps {
   onTimelineSeek?: (positionMs: number) => void;
   groupSize: number;
   onGroupSizeChange: (size: number) => void;
+  progressRatio?: number; // 0-1, time-based progress for accurate drag bar visual
 }
 
 const GROUP_SIZE_KEY = "timeline-group-size";
@@ -53,6 +54,7 @@ export function SceneTimeline({
   onTimelineSeek,
   groupSize,
   onGroupSizeChange,
+  progressRatio,
 }: SceneTimelineProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [hoveredGroup, setHoveredGroup] = useState<number | null>(null);
@@ -161,6 +163,14 @@ export function SceneTimeline({
     }, 300);
   };
 
+  // Cleanup timers on unmount
+  useEffect(() => {
+    return () => {
+      if (hoverTimer.current) clearTimeout(hoverTimer.current);
+      if (leaveTimer.current) clearTimeout(leaveTimer.current);
+    };
+  }, []);
+
   if (scenes.length === 0) return null;
 
   return (
@@ -177,10 +187,9 @@ export function SceneTimeline({
       <div
         ref={scrollRef}
         onWheel={handleWheel}
-        className="overflow-x-auto select-none"
-        style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
+        className="flex items-end gap-[2px] overflow-x-auto py-2 select-none"
+        style={{ scrollbarWidth: "none", msOverflowStyle: "none", paddingTop: 20, minHeight: 44 }}
       >
-      <div className="flex items-end gap-[2px] py-2 select-none" style={{ paddingTop: 20, minHeight: 44 }}>
         {groups.map((groupScenes, gi) => {
           const st = groupStatus(groupScenes);
           const isCurrent = gi === currentGroupIdx;
@@ -223,7 +232,6 @@ export function SceneTimeline({
           );
         })}
       </div>
-      </div>
 
       {/* Drag bar */}
       {durationMs > 0 && (
@@ -236,7 +244,7 @@ export function SceneTimeline({
           <div
             className="absolute top-0 left-0 h-full rounded"
             style={{
-              width: `${Math.min(100, (currentIndex / Math.max(1, scenes.length - 1)) * 100)}%`,
+              width: `${Math.min(100, (progressRatio ?? (currentIndex / Math.max(1, scenes.length - 1))) * 100)}%`,
               backgroundColor: "var(--accent)",
               opacity: 0.2,
             }}

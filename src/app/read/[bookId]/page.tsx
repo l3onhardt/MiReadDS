@@ -45,7 +45,14 @@ export default function ReaderPage() {
   const [currentSceneIdx, setCurrentSceneIdx] = useState(0);
   const [sceneTimeMs, setSceneTimeMs] = useState(0);
   const [totalTimeMs, setTotalTimeMs] = useState(0);
-  const [groupSize, setGroupSize] = useState(30);
+  const [groupSize, setGroupSize] = useState(() => {
+    try {
+      const v = parseInt(localStorage.getItem("timeline-group-size") || "30", 10);
+      return [15, 30, 60].includes(v) ? v : 30;
+    } catch {
+      return 30;
+    }
+  });
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const preloadAudioRef = useRef<HTMLAudioElement>(null);
@@ -340,6 +347,8 @@ export default function ReaderPage() {
     });
   }, [manifest, currentSceneIdx]);
 
+  const progressRatio = totalDurationMs > 0 ? totalTimeMs / totalDurationMs : 0;
+
   const handleSceneClick = useCallback((sceneIdx: number) => {
     if (!manifest) return;
     setCurrentSceneIdx(sceneIdx);
@@ -404,6 +413,7 @@ export default function ReaderPage() {
           onTimelineSeek={handleSeek}
           groupSize={groupSize}
           onGroupSizeChange={setGroupSize}
+          progressRatio={progressRatio}
         />
 
         <ReadingContent
