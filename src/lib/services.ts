@@ -697,3 +697,108 @@ export function getBookAudioProgress(bookId: number): BookAudioProgress {
     percent: totalScenes > 0 ? Math.round((generatedScenes / totalScenes) * 100) : 0,
   };
 }
+
+// ============================================================
+// Background generation queue
+// ============================================================
+
+interface GenTask {
+  chapterId: number;
+  priority: number; // 0 = highest (P0 urgent), 3 = lowest (P3 idle)
+}
+
+const genQueue: GenTask[] = [];
+let genRunning = false;
+
+function enqueueGen(chapterId: number, priority: number) {
+  // Don't enqueue if already in queue or already generating/done
+  const existing = genQueue.find((t) => t.chapterId === chapterId);
+  if (existing) {
+    if (priority < existing.priority) existing.priority = priority;
+    return;
+  }
+
+  const status = getChapterAudioStatus(chapterId);
+  if (status.status === "generating") return;
+
+  // For 'ready' status, check if all scenes are done
+  if (status.status === "ready" && status.sceneManifest) {
+    const allDone = (status.sceneManifest.generated_scenes || 0) >= (status.sceneManifest.total_scenes || 0);
+    if (allDone) return; // fully generated, skip
+  }
+
+  genQueue.push({ chapterId, priority });
+  genQueue.sort((a, b) => a.priority - b.priority);
+  processQueue();
+}
+
+async function processQueue() {
+  if (genRunning) return;
+  genRunning = true;
+
+  while (genQueue.length > 0) {
+    const task = genQueue.shift()!;
+    try {
+      await generateChapterAudio(task.chapterId);
+    } catch (e) {
+      console.error(`Queue generation failed for chapter ${task.chapterId}:`, e);
+    }
+  }
+
+  genRunning = false;
+}
+
+/** Called from import — prepare chapter 1 and enqueue chapter 2,3 */
+export function bootstrapBookAudio(bookId: number) {
+  const db = getDb();
+  const chapters = db.prepare(
+    "SELECT id FROM chapters WHERE book_id = ? ORDER BY \"index\" LIMIT 4"
+  ).all(bookId) as { id: number }[];
+
+  if (chapters.length === 0) return;
+
+  // Chapter 1: P0 (urgent, user is waiting)
+  enqueueGen(chapters[0].id, 0);
+
+  // Chapters 2-4: P3 (low priority, idle)
+  for (let i = 1; i < chapters.length; i++) {
+    enqueueGen(chapters[i].id, 3);
+  }
+}
+
+/** Called when user playback reaches > 50% of current chapter — pre-generate next */
+export function ensureNextChapterReady(bookId: number, currentChapterIdx: number) {
+  const db = getDb();
+  const nextChapter = db.prepare(
+    "SELECT id FROM chapters WHERE book_id = ? AND \"index\" = ?"
+  ).get(bookId, currentChapterIdx + 1) as { id: number } | undefined;
+
+  if (nextChapter) {
+    const status = getChapterAudioStatus(nextChapter.id);
+    if (status.status === "pending") {
+      enqueueGen(nextChapter.id, 2); // P2
+    }
+  }
+}
+
+/** P0: urgent single scene generation (when user skips to ungenerated scene) */
+export async function ensureSceneReady(chapterId: number, sceneIndex: number): Promise<string | null> {
+  const status = getChapterAudioStatus(chapterId);
+  if (status.sceneManifest?.scenes?.[sceneIndex]?.path) {
+    return status.sceneManifest.scenes[sceneIndex].path;
+  }
+
+  // Trigger generation at highest priority
+  enqueueGen(chapterId, 0);
+
+  // Wait up to 30s for the scene
+  for (let i = 0; i < 15; i++) {
+    await new Promise((r) => setTimeout(r, 2000));
+    const s = getChapterAudioStatus(chapterId);
+    if (s.sceneManifest?.scenes?.[sceneIndex]?.path) {
+      return s.sceneManifest.scenes[sceneIndex].path;
+    }
+  }
+
+  return null;
+}
