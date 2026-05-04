@@ -1,8 +1,7 @@
 "use client";
-import { useEffect, useState, useRef, useCallback, useMemo } from "react";
+import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { PlayerBar } from "@/components/PlayerBar";
-import { SceneDot, SceneStatus } from "@/components/SceneTimeline";
 import { ReadingContent } from "@/components/ReadingContent";
 import { CharacterPanel } from "@/components/CharacterPanel";
 import { ArrowLeft, List } from "lucide-react";
@@ -53,9 +52,11 @@ export default function ReaderPage() {
   const endedGuard = useRef(false);
   const preloadTriggered = useRef(false);
   const restorePos = useRef(0);
-  const totalDurationMs = manifest?.total_duration_ms || 0;
 
   const currentChapter: ChapterInfo | undefined = book?.chapters?.[currentChapterIdx];
+  const chapterCount = book?.chapters?.length || 0;
+  const totalDurationMs = manifest?.total_duration_ms || 0;
+  const positionPct = totalDurationMs > 0 ? totalTimeMs / totalDurationMs : 0;
 
   // Load book
   useEffect(() => {
@@ -76,16 +77,13 @@ export default function ReaderPage() {
     if (endedGuard.current) return;
     endedGuard.current = true;
 
-    if (!manifest) {
-      endedGuard.current = false;
-      return;
-    }
+    if (!manifest) return;
 
     if (currentSceneIdx < manifest.scenes.length - 1) {
       setCurrentSceneIdx((s) => s + 1);
       setSceneTimeMs(0);
     } else {
-      if (book && currentChapterIdx < book.chapters.length - 1) {
+      if (currentChapterIdx < chapterCount - 1) {
         setCurrentChapterIdx((c) => c + 1);
         setManifest(null);
         setAudioStatus("pending");
@@ -97,17 +95,17 @@ export default function ReaderPage() {
         setIsPlaying(false);
       }
     }
-  }, [manifest, currentSceneIdx, currentChapterIdx, book]);
+  }, [manifest, currentSceneIdx, currentChapterIdx, chapterCount]);
 
-  // Play a specific scene — quick poll then skip if not ready
+  // Play a specific scene — waits if scene not yet generated
   const playScene = useCallback(async (sceneIdx: number, startMs: number) => {
     if (!manifest || !audioRef.current) return;
     let scene = manifest.scenes[sceneIdx];
     if (!scene) return;
 
-    // If scene audio not ready yet, short poll (max 10s)
+    // If scene audio not ready yet, poll manifest until it is
     if (!scene.path && currentChapter) {
-      for (let i = 0; i < 5; i++) {
+      for (let i = 0; i < 60; i++) {
         await new Promise((r) => setTimeout(r, 2000));
         const res = await fetch(`/api/tts?chapterId=${currentChapter.id}`);
         const data = await res.json();
@@ -121,11 +119,7 @@ export default function ReaderPage() {
     }
 
     if (!scene?.path) {
-      console.warn("Scene not available, skipping:", sceneIdx);
-      endedGuard.current = false;
-      if (sceneIdx < manifest.scenes.length - 1) {
-        setCurrentSceneIdx((s) => s + 1);
-      }
+      advance();
       return;
     }
 
@@ -145,7 +139,7 @@ export default function ReaderPage() {
     audioRef.current.playbackRate = speed;
     audioRef.current.addEventListener("canplay", onLoaded, { once: true });
     audioRef.current.load();
-  }, [manifest, currentChapter, speed]);
+  }, [manifest, currentChapter, speed, advance]);
 
   // When scene changes, play it
   useEffect(() => {
@@ -184,7 +178,6 @@ export default function ReaderPage() {
     setTotalTimeMs(0);
 
     try {
-      // Trigger generation if needed
       let res = await fetch("/api/tts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -192,7 +185,6 @@ export default function ReaderPage() {
       });
       let data = await res.json();
 
-      // If generating, poll with progress
       if (data.status === "generating" || data.status === "pending") {
         setAudioStatus("generating");
         for (let i = 0; i < 120; i++) {
@@ -211,15 +203,11 @@ export default function ReaderPage() {
         if (restorePos.current > 0) {
           const target = restorePos.current;
           restorePos.current = 0;
-          // Find scene
           let acc = 0;
           let si = 0;
           for (let i = 0; i < data.sceneManifest.scenes.length; i++) {
             const dur = data.sceneManifest.scenes[i].duration_ms;
-            if (target < acc + dur) {
-              si = i;
-              break;
-            }
+            if (target < acc + dur) { si = i; break; }
             acc += dur;
             si = i;
           }
@@ -264,10 +252,10 @@ export default function ReaderPage() {
 
   // Preload next chapter at 30%
   useEffect(() => {
-    if (!book || !currentChapter || preloadTriggered.current || totalDurationMs <= 0) return;
+    if (!currentChapter || preloadTriggered.current || totalDurationMs <= 0) return;
     if (totalTimeMs / totalDurationMs >= 0.3) {
       preloadTriggered.current = true;
-      const next = book.chapters[currentChapterIdx + 1];
+      const next = book?.chapters?.[currentChapterIdx + 1];
       if (next) {
         fetch("/api/tts", {
           method: "POST",
@@ -276,7 +264,7 @@ export default function ReaderPage() {
         }).catch(() => {});
       }
     }
-  }, [totalTimeMs, totalDurationMs, book, currentChapter]);
+  }, [totalTimeMs, totalDurationMs, currentChapter, book]);
 
   // Save progress
   useEffect(() => {
@@ -324,7 +312,6 @@ export default function ReaderPage() {
       if (ms < acc + dur) {
         setCurrentSceneIdx(i);
         setSceneTimeMs(0);
-        // Use playScene directly for seek
         setTimeout(() => playScene(i, ms - acc), 0);
         return;
       }
@@ -337,41 +324,10 @@ export default function ReaderPage() {
       audioRef.current.pause();
       audioRef.current.src = "";
     }
-    endedGuard.current = false;
-    preloadTriggered.current = false;
-    setManifest(null);
-    setAudioStatus("pending");
-    setCurrentSceneIdx(0);
-    setSceneTimeMs(0);
-    setTotalTimeMs(0);
     setCurrentChapterIdx(idx);
   };
 
-  const sceneDots = useMemo((): SceneDot[] => {
-    if (!manifest) return [];
-    const generatedCount = manifest.generated_scenes ?? 0;
-    return manifest.scenes.map((_, idx) => {
-      let status: SceneStatus;
-      if (idx < currentSceneIdx) status = "played";
-      else if (idx === currentSceneIdx) status = "current";
-      else if (idx < generatedCount) status = "ready";
-      else if (idx === generatedCount) status = "generating";
-      else status = "waiting";
-      return { index: idx, status };
-    });
-  }, [manifest, currentSceneIdx]);
-
-  const handleSceneClick = useCallback((sceneIdx: number) => {
-    if (!manifest) return;
-    setCurrentSceneIdx(sceneIdx);
-    setSceneTimeMs(0);
-    setTimeout(() => playScene(sceneIdx, 0), 0);
-  }, [manifest, playScene]);
-
-  const totalScenes = manifest?.total_scenes ?? manifest?.scenes.length ?? 0;
-  const generatedScenes = manifest?.generated_scenes ?? 0;
-
-  if (!book) return <div className="flex justify-center py-20" style={{ color: "var(--muted)" }}>加载中...</div>;
+  if (!book || !book.chapters) return <div className="flex justify-center py-20" style={{ color: "var(--muted)" }}>加载中...</div>;
 
   const currentSceneText = manifest?.scenes?.[currentSceneIdx]?.text || null;
 
@@ -389,7 +345,7 @@ export default function ReaderPage() {
 
         {chapterListOpen && (
           <div className="glass p-3 mb-4 max-h-64 overflow-y-auto rounded-xl">
-            {book.chapters.map((ch: ChapterInfo, i: number) => (
+            {(book.chapters || []).map((ch: ChapterInfo, i: number) => (
               <button key={ch.id}
                 onClick={() => { goToChapter(i); setChapterListOpen(false); }}
                 className="block w-full text-left px-3 py-2 rounded-lg text-sm transition-colors"
@@ -407,21 +363,19 @@ export default function ReaderPage() {
         <PlayerBar
           chapterTitle={currentChapter?.title || `第${currentChapterIdx + 1}章`}
           chapterIdx={currentChapterIdx}
-          totalChapters={book.chapters.length}
+          totalChapters={chapterCount}
           isPlaying={isPlaying}
           audioStatus={audioStatus}
+          genProgress={genProgress}
           onTogglePlay={togglePlay}
           onPrevChapter={() => currentChapterIdx > 0 && goToChapter(currentChapterIdx - 1)}
-          onNextChapter={() => currentChapterIdx < book.chapters.length - 1 && goToChapter(currentChapterIdx + 1)}
+          onNextChapter={() => currentChapterIdx < chapterCount - 1 && goToChapter(currentChapterIdx + 1)}
           currentTimeMs={totalTimeMs}
           durationMs={totalDurationMs}
+          positionPercent={positionPct}
+          onSeek={handleSeek}
           speed={speed}
           onSpeedChange={setSpeed}
-          scenes={sceneDots}
-          currentSceneIdx={currentSceneIdx}
-          totalScenes={totalScenes}
-          generatedScenes={generatedScenes}
-          onSceneClick={handleSceneClick}
         />
 
         <ReadingContent
@@ -436,8 +390,8 @@ export default function ReaderPage() {
             className="text-sm px-3 py-1.5 rounded-lg disabled:opacity-30" style={{ color: "var(--muted)" }}>
             上一章
           </button>
-          <span className="text-sm" style={{ color: "var(--muted)" }}>{currentChapterIdx + 1} / {book.chapters.length}</span>
-          <button onClick={() => goToChapter(Math.min(book.chapters.length - 1, currentChapterIdx + 1))} disabled={currentChapterIdx === book.chapters.length - 1}
+          <span className="text-sm" style={{ color: "var(--muted)" }}>{currentChapterIdx + 1} / {chapterCount}</span>
+          <button onClick={() => goToChapter(Math.min(chapterCount - 1, currentChapterIdx + 1))} disabled={currentChapterIdx === chapterCount - 1}
             className="text-sm px-3 py-1.5 rounded-lg disabled:opacity-30" style={{ color: "var(--accent)" }}>
             下一章
           </button>
