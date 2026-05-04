@@ -282,7 +282,7 @@ page.tsx
   ├── sceneToPara = useMemo(() => buildSceneToPara(content, manifest.scenes, paragraphs), [content, manifest])
   ├── currentParaIdx = sceneToPara[currentSceneIdx] ?? -1
   │
-  ├──> ReadingContent: { content, paragraphs, currentParaIdx, onParagraphSeek }
+  ├──> ReadingContent: { paragraphs, currentParaIdx, isPlaying, audioStatus, onParagraphSeek }
   ├──> RightPanel:     { chapters, currentChapterIdx, paragraphs, currentParaIdx, onParagraphSelect }
   └──> PlayerBar:      { ...timeline props 不变 }
 
@@ -308,6 +308,7 @@ handleParagraphSeek(paraIdx):
 - [ ] 当前播放段进入视口外时页面平滑滚动让其居中
 - [ ] 右侧栏不再显示重复的时间轴/分组柱状图;显示段落跳转列表
 - [ ] 右侧栏点击某段跳转后,正文 gutter 高亮、PlayerBar 时间轴位置同步更新
+- [ ] 右侧栏段落列表的当前段自动滚动到可视区中间
 - [ ] 切换章节后 `sceneToPara` 映射重新计算,新章节首段正确识别(回归原 bug 主要发生场景)
 
 ---
