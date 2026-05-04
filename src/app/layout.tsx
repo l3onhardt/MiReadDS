@@ -32,7 +32,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       </head>
       <body className="min-h-screen antialiased">
         <ThemeScript />
-        <main className="mx-auto max-w-4xl px-4 py-6 md:px-6 md:py-8">
+        <main className="mx-auto max-w-6xl px-4 py-6 md:px-6 md:py-8">
           <nav className="flex items-center justify-between mb-6">
             <Link href="/" className="text-sm font-medium" style={{ color: "var(--text)" }}>MiReader</Link>
             <Link href="/settings" className="text-sm" style={{ color: "var(--muted)" }}>设置</Link>

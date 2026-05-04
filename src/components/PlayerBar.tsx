@@ -70,7 +70,7 @@ export function PlayerBar({
               {chapterTitle}
             </span>
             <span className="text-xs ml-2 flex-shrink-0" style={{ color: "var(--muted)" }}>
-              {isGenerating && !isReady ? "准备中..." : formatDuration(currentTimeMs)}
+              {isGenerating && !isReady ? "准备中..." : `${formatDuration(currentTimeMs)} / ${formatDuration(durationMs)}`}
             </span>
           </div>
 

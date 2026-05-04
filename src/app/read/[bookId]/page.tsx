@@ -4,6 +4,7 @@ import type { SceneDot, SceneStatus } from "@/components/SceneTimeline";
 import { useParams } from "next/navigation";
 import { PlayerBar } from "@/components/PlayerBar";
 import { ReadingContent } from "@/components/ReadingContent";
+import { RightPanel } from "@/components/RightPanel";
 import { ArrowLeft, List } from "lucide-react";
 import Link from "next/link";
 
@@ -53,6 +54,11 @@ export default function ReaderPage() {
       return 30;
     }
   });
+
+  const handleGroupSizeChange = useCallback((size: number) => {
+    setGroupSize(size);
+    try { localStorage.setItem("timeline-group-size", String(size)); } catch {}
+  }, []);
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const preloadAudioRef = useRef<HTMLAudioElement>(null);
@@ -365,18 +371,18 @@ export default function ReaderPage() {
 
   return (
     <div className="flex gap-4">
-      <div className="flex-1 min-w-0">
+      <div className="flex-[7] min-w-0">
         <div className="flex items-center gap-3 mb-4">
           <Link href="/" className="flex-shrink-0" style={{ color: "var(--muted)" }}><ArrowLeft size={20} /></Link>
           <div className="min-w-0 flex-1"><h1 className="text-lg font-semibold truncate">{book.title}</h1></div>
           <button onClick={() => setChapterListOpen(!chapterListOpen)}
-            className="flex-shrink-0 p-1.5 rounded-lg" style={{ color: "var(--muted)" }}>
+            className="flex-shrink-0 p-1.5 rounded-lg lg:hidden" style={{ color: "var(--muted)" }}>
             <List size={20} />
           </button>
         </div>
 
         {chapterListOpen && (
-          <div className="glass p-3 mb-4 max-h-64 overflow-y-auto rounded-xl">
+          <div className="glass p-3 mb-4 max-h-64 overflow-y-auto rounded-xl lg:hidden">
             {(book.chapters || []).map((ch: ChapterInfo, i: number) => (
               <button key={ch.id}
                 onClick={() => { goToChapter(i); setChapterListOpen(false); }}
@@ -412,7 +418,7 @@ export default function ReaderPage() {
           onSceneClick={handleSceneClick}
           onTimelineSeek={handleSeek}
           groupSize={groupSize}
-          onGroupSizeChange={setGroupSize}
+          onGroupSizeChange={handleGroupSizeChange}
           progressRatio={progressRatio}
         />
 
@@ -421,6 +427,9 @@ export default function ReaderPage() {
           currentSceneText={currentSceneText}
           isPlaying={isPlaying}
           audioStatus={audioStatus}
+          currentTimeMs={totalTimeMs}
+          durationMs={totalDurationMs}
+          onTextSeek={handleSeek}
         />
 
         <div className="flex justify-between mt-4">
@@ -435,6 +444,17 @@ export default function ReaderPage() {
           </button>
         </div>
       </div>
+
+      {/* RIGHT: Collapsible panel 30% */}
+      <RightPanel
+        chapters={(book.chapters || []).map((ch: any) => ({ id: ch.id, index: ch.index, title: ch.title }))}
+        currentChapterIdx={currentChapterIdx}
+        onChapterSelect={goToChapter}
+        scenes={sceneDots}
+        currentSceneIdx={currentSceneIdx}
+        onSceneClick={handleSceneClick}
+        groupSize={groupSize}
+      />
 
       <audio ref={audioRef}
         onEnded={advance}
