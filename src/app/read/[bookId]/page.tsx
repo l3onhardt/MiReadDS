@@ -7,6 +7,7 @@ import { ReadingContent } from "@/components/ReadingContent";
 import { RightPanel } from "@/components/RightPanel";
 import { ArrowLeft, List } from "lucide-react";
 import Link from "next/link";
+import { splitParagraphs, buildSceneToPara } from "@/lib/sceneParaMap";
 
 interface SceneInfo {
   path: string;
@@ -69,6 +70,19 @@ export default function ReaderPage() {
   const currentChapter: ChapterInfo | undefined = book?.chapters?.[currentChapterIdx];
   const chapterCount = book?.chapters?.length || 0;
   const totalDurationMs = manifest?.total_duration_ms || 0;
+
+  // Derive paragraphs and sceneIdx → paragraphIdx mapping for precise highlight & jump.
+  const paragraphs = useMemo(
+    () => (currentChapter?.content ? splitParagraphs(currentChapter.content) : []),
+    [currentChapter?.content]
+  );
+
+  const sceneToPara = useMemo(() => {
+    if (!currentChapter?.content || !manifest?.scenes) return [];
+    return buildSceneToPara(currentChapter.content, manifest.scenes, paragraphs);
+  }, [currentChapter?.content, manifest?.scenes, paragraphs]);
+
+  const currentParaIdx = sceneToPara[currentSceneIdx] ?? -1;
 
   // Load book
   useEffect(() => {
@@ -361,6 +375,18 @@ export default function ReaderPage() {
     setSceneTimeMs(0);
     setTimeout(() => playScene(sceneIdx, 0), 0);
   }, [manifest, playScene]);
+
+  const handleParagraphSeek = useCallback(
+    (paraIdx: number) => {
+      if (!manifest || sceneToPara.length === 0) return;
+      const firstSceneIdx = sceneToPara.findIndex((p) => p === paraIdx);
+      if (firstSceneIdx < 0) return; // 防御:理论上 paragraphs 与 scenes 一一对齐
+      setCurrentSceneIdx(firstSceneIdx);
+      setSceneTimeMs(0);
+      setTimeout(() => playScene(firstSceneIdx, 0), 0);
+    },
+    [manifest, sceneToPara, playScene]
+  );
 
   const totalScenes = manifest?.total_scenes ?? manifest?.scenes.length ?? 0;
   const generatedScenes = manifest?.generated_scenes ?? 0;
