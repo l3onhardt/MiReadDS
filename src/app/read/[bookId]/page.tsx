@@ -331,6 +331,13 @@ export default function ReaderPage() {
       audioRef.current.pause();
       audioRef.current.src = "";
     }
+    endedGuard.current = false;
+    preloadTriggered.current = false;
+    setManifest(null);
+    setAudioStatus("pending");
+    setCurrentSceneIdx(0);
+    setSceneTimeMs(0);
+    setTotalTimeMs(0);
     setCurrentChapterIdx(idx);
   };
 
