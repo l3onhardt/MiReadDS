@@ -305,6 +305,46 @@ interface DirectorScene {
 
 const CHAPTER_AUDIO_DIR = path.join(process.cwd(), "data", "chapter-audio");
 
+// ============================================================
+// Rule-based scene splitting (replaces LLM director for single-narrator mode)
+// ============================================================
+
+function splitTextIntoScenes(text: string): DirectorScene[] {
+  const scenes: DirectorScene[] = [];
+  // Split by paragraphs (blank lines)
+  const paragraphs = text.split(/\n+/).filter((p) => p.trim().length > 0);
+
+  for (const para of paragraphs) {
+    const trimmed = para.trim();
+    if (trimmed.length <= 500) {
+      scenes.push({ text: trimmed, speaker: null, voice_style: "", emotion: "沉稳" });
+    } else {
+      // Split long paragraphs at sentence boundaries (Chinese + English punctuation)
+      const sentences = trimmed.split(/(?<=[。！？.!?])/);
+      let current = "";
+      for (const sent of sentences) {
+        if (!sent) continue;
+        if (current.length + sent.length > 500 && current) {
+          scenes.push({ text: current, speaker: null, voice_style: "", emotion: "沉稳" });
+          current = sent;
+        } else {
+          current += sent;
+        }
+      }
+      if (current.trim()) {
+        scenes.push({ text: current.trim(), speaker: null, voice_style: "", emotion: "沉稳" });
+      }
+    }
+  }
+
+  // Fallback: if no scenes, use entire text as one scene
+  if (scenes.length === 0 && text.trim()) {
+    scenes.push({ text: text.trim(), speaker: null, voice_style: "", emotion: "沉稳" });
+  }
+
+  return scenes;
+}
+
 // Emotion tag mapping for TTS inline tags
 const EMOTION_TAG_MAP: Record<string, string> = {
   "开心": "开心", "悲伤": "悲伤", "生气": "愤怒", "轻声": "轻声",
@@ -448,59 +488,14 @@ export async function generateChapterAudio(chapterId: number): Promise<{ audioPa
 
     const apiKey = getApiKey();
     const book = db.prepare("SELECT * FROM books WHERE id = ?").get(chapter.book_id) as any;
-    const characters = db.prepare(
-      "SELECT c.name, cv.mimo_voice_id FROM characters c LEFT JOIN character_voices cv ON cv.character_id = c.id WHERE c.book_id = ?"
-    ).all(chapter.book_id) as any[];
-
     const baseVoice = book?.narrator_voice || "白桦";
 
-    const charContext = characters.length > 0
-      ? "角色列表：" + characters.map((c: any) => `${c.name}(${c.mimo_voice_id || "未知声线"})`).join("、")
-      : "";
+    // === Phase 1: Rule-based scene splitting ===
+    const allScenes: DirectorScene[] = splitTextIntoScenes(chapter.content);
 
-    // === Phase 1: LLM Director ===
-    const maxBatchSize = 6000;
-    let allScenes: DirectorScene[] = [];
-
-    for (let batchStart = 0; batchStart < chapter.content.length; batchStart += maxBatchSize) {
-      const batchText = chapter.content.slice(batchStart, batchStart + maxBatchSize);
-
-      const directorPrompt = `你是一个有声剧导演。分析以下小说片段，将文本切分为演绎场景（scenes），为每个场景标注声音演绎指令。
-
-规则：
-1. 保持原文完全不变，每个场景的text必须是原文的连续片段
-2. 场景长度建议 200-500 字，对话可以更短，旁白可以稍长
-3. 标注每个场景的 voice_style（声音风格）和 emotion（情绪）
-4. 如果是对话，标注 speaker（说话角色名）；旁白 speaker 为 null
-
-声音风格可选：少年音、少女音、御姐音、大叔音、老年音（旁白用空字符串）
-情绪可选：开心、悲伤、愤怒、紧张、轻声、急促、严肃、温柔、惊讶、平静、疲惫（最多2个用空格分隔，旁白可用 沉稳）
-
-${charContext}
-
-小说片段：
-${batchText}
-
-只输出JSON：
-{"scenes": [{"text": "原文片段", "speaker": "角色名或null", "voice_style": "声音风格或空", "emotion": "情绪标签"}]}`;
-
-      const result = await callMiMoPro([{ role: "user", content: directorPrompt }]);
-      const scenes: DirectorScene[] = (result.scenes || []).map((s: any) => ({
-        text: s.text || "",
-        speaker: s.speaker || null,
-        voice_style: s.voice_style || "",
-        emotion: s.emotion || "",
-      }));
-      allScenes = allScenes.concat(scenes);
-
-      // Update progress
-      db.prepare("UPDATE chapter_audio SET size_bytes = ? WHERE chapter_id = ?")
-        .run(Math.round((batchStart + batchText.length) / chapter.content.length * 50), chapterId);
-    }
-
-    if (allScenes.length === 0) {
-      allScenes = [{ text: chapter.content, speaker: null, voice_style: "", emotion: "沉稳" }];
-    }
+    // Update progress: splitting done
+    db.prepare("UPDATE chapter_audio SET size_bytes = 25 WHERE chapter_id = ?")
+      .run(chapterId);
 
     // Save the full scene plan (without audio paths) to DB first
     const initialManifest = {
@@ -527,7 +522,7 @@ ${batchText}
     const totalScenes = allScenes.length;
     const CONCURRENCY = 5;
     const chapterBookId = chapter.book_id;
-    const FIRST_BATCH_SIZE = Math.min(10, totalScenes); // Generate at least 10 scenes before ready
+    const FIRST_BATCH_SIZE = Math.min(5, totalScenes); // Generate at least 10 scenes before ready
 
     // Generate a single batch of scenes
     async function generateBatch(batchStart: number, count: number): Promise<{ index: number; path: string; duration_ms: number }[]> {
