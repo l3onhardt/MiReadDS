@@ -12,6 +12,8 @@ interface Book {
   chapter_count: number;
   character_count: number;
   progress_chapter: number | null;
+  audio_ready_scenes?: number;
+  audio_total_scenes?: number;
 }
 
 export default function BookshelfPage() {
@@ -81,6 +83,8 @@ export default function BookshelfPage() {
                 ? Math.round((book.progress_chapter / (book.chapter_count - 1)) * 100)
                 : 0
             }
+            audioReadyScenes={book.audio_ready_scenes || 0}
+            audioTotalScenes={book.audio_total_scenes || 0}
           />
         ))}
       </div>
