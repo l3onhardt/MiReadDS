@@ -1,105 +1,35 @@
 "use client";
-import { useRef, useEffect, useState, useCallback } from "react";
-import { Loader2 } from "lucide-react";
+import { useRef, useEffect } from "react";
+import { Loader2, Play } from "lucide-react";
 
 interface ReadingContentProps {
-  content: string;
-  currentSceneText: string | null;
+  paragraphs: string[];
+  currentParaIdx: number;
   isPlaying: boolean;
   audioStatus: string;
-  currentTimeMs?: number;
-  durationMs?: number;
-  onTextSeek?: (positionMs: number) => void;
+  onParagraphSeek: (paraIdx: number) => void;
 }
 
-const DRAG_THRESHOLD_PX = 5;
-const SEEK_STEP_PX = 50;
-
 export function ReadingContent({
-  content,
-  currentSceneText,
+  paragraphs,
+  currentParaIdx,
   isPlaying,
   audioStatus,
-  currentTimeMs = 0,
-  durationMs = 0,
-  onTextSeek,
+  onParagraphSeek,
 }: ReadingContentProps) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const activeRef = useRef<HTMLParagraphElement>(null);
-  const [dragIndicator, setDragIndicator] = useState<{
-    text: string;
-    x: number;
-    y: number;
-  } | null>(null);
+  const activeRef = useRef<HTMLDivElement>(null);
 
-  const dragState = useRef({
-    active: false,
-    startX: 0,
-    lastClientX: 0,
-    accumulatedMs: 0,
-    lastSeekX: 0,
-    lastSeekTime: 0,
-  });
-
-  // Auto-scroll to active paragraph
+  // Auto-scroll page so the active paragraph stays in view.
+  // Triggers on currentParaIdx change (was currentSceneText) — O(1) and stable.
   useEffect(() => {
     if (activeRef.current && isPlaying) {
       activeRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
     }
-  }, [currentSceneText, isPlaying]);
+  }, [currentParaIdx, isPlaying]);
 
   const isGenerating = audioStatus === "generating" || audioStatus === "pending";
 
-  // Drag handlers
-  const handlePointerDown = useCallback((e: React.PointerEvent) => {
-    dragState.current = {
-      active: true,
-      startX: e.clientX,
-      lastClientX: e.clientX,
-      accumulatedMs: 0,
-      lastSeekX: e.clientX,
-      lastSeekTime: Date.now(),
-    };
-    (e.target as HTMLElement).setPointerCapture?.(e.pointerId);
-  }, []);
-
-  const handlePointerMove = useCallback((e: React.PointerEvent) => {
-    if (!dragState.current.active || !durationMs) return;
-    const deltaX = e.clientX - dragState.current.startX;
-    if (Math.abs(deltaX) < DRAG_THRESHOLD_PX) return;
-
-    const containerWidth = containerRef.current?.offsetWidth || 400;
-    const speedFactor = Math.abs(e.movementX) > 10 ? 2 : 1;
-    const incrementalPx = e.clientX - dragState.current.lastClientX;
-    dragState.current.lastClientX = e.clientX;
-    const incrementalMs = (incrementalPx / containerWidth) * durationMs * speedFactor;
-    dragState.current.accumulatedMs += incrementalMs;
-    const newPos = Math.max(0, Math.min(durationMs, currentTimeMs + dragState.current.accumulatedMs));
-    const diffMs = newPos - currentTimeMs;
-
-    const direction = diffMs > 0 ? "快进" : "快退";
-    const absSec = Math.abs(Math.round(diffMs / 1000));
-    setDragIndicator({
-      text: diffMs > 0 ? `▸▸ ${direction} +${absSec}s` : `◂◂ ${direction} -${absSec}s`,
-      x: e.clientX,
-      y: e.clientY - 40,
-    });
-
-    const pxSinceLast = Math.abs(e.clientX - dragState.current.lastSeekX);
-    const msSinceLast = Date.now() - dragState.current.lastSeekTime;
-    if (pxSinceLast >= SEEK_STEP_PX && msSinceLast >= 100) {
-      dragState.current.lastSeekX = e.clientX;
-      dragState.current.lastSeekTime = Date.now();
-      onTextSeek?.(newPos);
-    }
-  }, [durationMs, currentTimeMs, onTextSeek]);
-
-  const handlePointerUp = useCallback(() => {
-    dragState.current.active = false;
-    setDragIndicator(null);
-  }, []);
-
-  if (!content) {
+  if (paragraphs.length === 0) {
     return (
       <div className="glass p-8 text-center" style={{ color: "var(--muted)" }}>
         {isGenerating ? "正在准备章节音频..." : "暂无内容"}
@@ -107,34 +37,8 @@ export function ReadingContent({
     );
   }
 
-  const paragraphs = content.split(/\n+/).filter((p) => p.trim().length > 0);
-
-  // Find which paragraph contains the current scene text, by character offset
-  const activeParagraphIndex = ((): number => {
-    if (!currentSceneText || !isPlaying) return -1;
-    const pos = content.indexOf(currentSceneText.trim());
-    if (pos === -1) return -1;
-    let paraIdx = 0;
-    let cursor = 0;
-    for (const p of paragraphs) {
-      const idx = content.indexOf(p, cursor);
-      if (idx === -1) { cursor += p.length; paraIdx++; continue; }
-      if (pos >= idx && pos < idx + p.length) return paraIdx;
-      cursor = idx + p.length;
-      paraIdx++;
-    }
-    return -1;
-  })();
-
   return (
-    <div
-      className="glass p-5 md:p-8 relative select-none"
-      onPointerDown={handlePointerDown}
-      onPointerMove={handlePointerMove}
-      onPointerUp={handlePointerUp}
-      onPointerCancel={handlePointerUp}
-      style={{ touchAction: "pan-y" }}
-    >
+    <div className="glass p-5 md:p-8 relative">
       {isGenerating && (
         <div className="absolute top-3 right-3 flex items-center gap-2 text-xs" style={{ color: "var(--accent)" }}>
           <Loader2 size={14} className="animate-spin" />
@@ -142,58 +46,75 @@ export function ReadingContent({
         </div>
       )}
 
-      <div ref={containerRef} className="leading-relaxed md:leading-loose space-y-3 text-[17px] max-h-[60vh] overflow-y-auto pr-2">
+      <div className="leading-relaxed md:leading-loose space-y-3 text-[17px]">
         {paragraphs.map((p, i) => {
-          const isCurrent = i === activeParagraphIndex;
+          const isCurrent = i === currentParaIdx;
           return (
-            <p
+            <div
               key={i}
               ref={isCurrent ? activeRef : undefined}
-              className="transition-all duration-500 px-3 py-1.5 rounded-lg"
-              style={{
-                backgroundColor: isCurrent ? "var(--glass-bg)" : "transparent",
-                borderLeft: isCurrent ? "4px solid var(--accent)" : "4px solid transparent",
-                boxShadow: isCurrent ? "0 2px 12px var(--glass-border)" : "none",
-                transform: isCurrent ? "scale(1.01)" : "scale(1)",
-                opacity: isPlaying ? (isCurrent ? 1 : 0.5) : 1,
-                fontWeight: isCurrent ? 500 : 400,
-                animation: isCurrent && isPlaying ? "rc-breathe 2s ease-in-out infinite" : "none",
-              }}
+              className="flex gap-2 group"
             >
-              {p}
-            </p>
+              {/* Left gutter — clickable, shows ▶ on hover/focus */}
+              <button
+                type="button"
+                onClick={() => onParagraphSeek(i)}
+                aria-label={`从段 ${i + 1} 开始播放`}
+                className="flex-shrink-0 w-5 flex items-start justify-center pt-1.5 cursor-pointer transition-colors"
+                style={{
+                  touchAction: "manipulation",
+                }}
+              >
+                {isCurrent ? (
+                  <span
+                    className="block w-1 rounded-full"
+                    style={{
+                      backgroundColor: "var(--accent)",
+                      height: "1.4em",
+                      animation: isPlaying ? "rc-breathe 2s ease-in-out infinite" : "none",
+                    }}
+                  />
+                ) : (
+                  <>
+                    <span
+                      className="block w-px group-hover:hidden"
+                      style={{
+                        backgroundColor: "var(--border)",
+                        height: "1.2em",
+                      }}
+                    />
+                    <Play
+                      size={12}
+                      className="hidden group-hover:block"
+                      style={{ color: "var(--accent)", marginTop: 2 }}
+                    />
+                  </>
+                )}
+              </button>
+
+              {/* Paragraph text — no gestures, fully native interaction */}
+              <p
+                className="flex-1 transition-all duration-300 px-1.5 py-1 rounded-lg"
+                style={{
+                  backgroundColor: isCurrent ? "var(--glass-bg)" : "transparent",
+                  boxShadow: isCurrent ? "0 2px 12px var(--glass-border)" : "none",
+                  opacity: isPlaying ? (isCurrent ? 1 : 0.5) : 1,
+                  fontWeight: isCurrent ? 500 : 400,
+                  animation: isCurrent && isPlaying ? "rc-breathe 2s ease-in-out infinite" : "none",
+                }}
+              >
+                {p}
+              </p>
+            </div>
           );
         })}
       </div>
 
-      {/* Drag indicator */}
-      {dragIndicator && (
-        <div
-          className="fixed z-50 pointer-events-none px-2 py-1 rounded text-xs font-medium shadow"
-          style={{
-            left: dragIndicator.x,
-            top: dragIndicator.y,
-            transform: "translateX(-50%)",
-            backgroundColor: "var(--accent)",
-            color: "var(--bg)",
-            whiteSpace: "nowrap",
-          }}
-        >
-          {dragIndicator.text}
-        </div>
-      )}
-
-      <div className="text-center pt-3 mt-3 border-t" style={{ borderColor: "var(--glass-border)" }}>
-        <span className="text-xs" style={{ color: "var(--muted)" }}>
-          {durationMs > 0 ? "← 拖动正文快进/快退 →" : ""}
-        </span>
-      </div>
-
-      {/* Breathe keyframes */}
+      {/* Breathe keyframes (kept) */}
       <style>{`
         @keyframes rc-breathe {
-          0%, 100% { background-color: var(--glass-bg); }
-          50% { background-color: rgba(128, 128, 128, 0.08); }
+          0%, 100% { opacity: 1; }
+          50% { opacity: 0.75; }
         }
       `}</style>
     </div>

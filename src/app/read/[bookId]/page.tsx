@@ -393,8 +393,6 @@ export default function ReaderPage() {
 
   if (!book || !book.chapters) return <div className="flex justify-center py-20" style={{ color: "var(--muted)" }}>加载中...</div>;
 
-  const currentSceneText = manifest?.scenes?.[currentSceneIdx]?.text || null;
-
   return (
     <div className="flex gap-4">
       <div className="flex-[7] min-w-0">
@@ -449,13 +447,11 @@ export default function ReaderPage() {
         />
 
         <ReadingContent
-          content={currentChapter?.content || ""}
-          currentSceneText={currentSceneText}
+          paragraphs={paragraphs}
+          currentParaIdx={currentParaIdx}
           isPlaying={isPlaying}
           audioStatus={audioStatus}
-          currentTimeMs={totalTimeMs}
-          durationMs={totalDurationMs}
-          onTextSeek={handleSeek}
+          onParagraphSeek={handleParagraphSeek}
         />
 
         <div className="flex justify-between mt-4">
