@@ -28,16 +28,23 @@ export function RightPanel({
   const [chaptersOpen, setChaptersOpen] = useState(true);
   const [paragraphsOpen, setParagraphsOpen] = useState(true);
 
-  // Auto-scroll active rows into view inside their respective lists
+  // Auto-scroll active rows into view inside their respective lists.
+  // Use parent.scrollTop directly (not scrollIntoView) so the page window
+  // doesn't get yanked along — sticky behavior must be preserved.
   const activeChapterRef = useRef<HTMLButtonElement>(null);
   const activeRowRef = useRef<HTMLButtonElement>(null);
+  const scrollIntoContainerCenter = (el: HTMLElement | null) => {
+    if (!el || !el.parentElement) return;
+    const container = el.parentElement;
+    const target = el.offsetTop - container.clientHeight / 2 + el.clientHeight / 2;
+    container.scrollTo({ top: Math.max(0, target), behavior: "smooth" });
+  };
   useEffect(() => {
-    if (!activeChapterRef.current) return;
-    activeChapterRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    scrollIntoContainerCenter(activeChapterRef.current);
   }, [currentChapterIdx]);
   useEffect(() => {
-    if (currentParaIdx < 0 || !activeRowRef.current) return;
-    activeRowRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (currentParaIdx < 0) return;
+    scrollIntoContainerCenter(activeRowRef.current);
   }, [currentParaIdx]);
 
   return (
