@@ -522,7 +522,7 @@ export async function generateChapterAudio(chapterId: number): Promise<{ audioPa
     const totalScenes = allScenes.length;
     const CONCURRENCY = 5;
     const chapterBookId = chapter.book_id;
-    const FIRST_BATCH_SIZE = Math.min(5, totalScenes); // Generate at least 10 scenes before ready
+    const FIRST_BATCH_SIZE = Math.min(5, totalScenes);
 
     // Generate a single batch of scenes
     async function generateBatch(batchStart: number, count: number): Promise<{ index: number; path: string; duration_ms: number }[]> {
