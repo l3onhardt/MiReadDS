@@ -32,18 +32,23 @@ export function ReadingContent({ content, currentSceneText, isPlaying, audioStat
 
   const paragraphs = content.split(/\n+/).filter((p) => p.trim().length > 0);
 
-  // Check if a paragraph contains the current scene text
-  const isParagraphActive = (paraText: string): boolean => {
-    if (!currentSceneText || !isPlaying) return false;
-    const pt = paraText.trim();
-    const st = currentSceneText.trim();
-    if (!pt || !st) return false;
-    // Direct inclusion check
-    if (pt.includes(st) || st.includes(pt)) return true;
-    // Fuzzy: check first 30 chars
-    if (st.length > 30 && pt.includes(st.slice(0, 30))) return true;
-    return false;
-  };
+  // Find which paragraph contains the current scene text, by character offset.
+  // Uses exact position matching to avoid confusing duplicate/similar text.
+  const activeParagraphIndex = ((): number => {
+    if (!currentSceneText || !isPlaying) return -1;
+    const pos = content.indexOf(currentSceneText.trim());
+    if (pos === -1) return -1;
+    let paraIdx = 0;
+    let cursor = 0;
+    for (const p of paragraphs) {
+      const idx = content.indexOf(p, cursor);
+      if (idx === -1) { cursor += p.length; paraIdx++; continue; }
+      if (pos >= idx && pos < idx + p.length) return paraIdx;
+      cursor = idx + p.length;
+      paraIdx++;
+    }
+    return -1;
+  })();
 
   return (
     <div className="glass p-5 md:p-8 relative">
@@ -55,7 +60,7 @@ export function ReadingContent({ content, currentSceneText, isPlaying, audioStat
       )}
       <div ref={containerRef} className="leading-relaxed md:leading-loose space-y-3 text-[17px] max-h-[60vh] overflow-y-auto pr-2">
         {paragraphs.map((p, i) => {
-          const isCurrent = isParagraphActive(p);
+          const isCurrent = i === activeParagraphIndex;
           return (
             <p
               key={i}
