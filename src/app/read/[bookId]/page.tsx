@@ -467,12 +467,15 @@ export default function ReaderPage() {
         </div>
       </div>
 
-      {/* RIGHT: Chapter list panel 30% */}
+      {/* RIGHT: Collapsible panel 30% */}
       <div className="flex-[3] min-w-0 hidden lg:block">
         <RightPanel
           chapters={(book.chapters || []).map((ch: any) => ({ id: ch.id, index: ch.index, title: ch.title }))}
           currentChapterIdx={currentChapterIdx}
           onChapterSelect={goToChapter}
+          paragraphs={paragraphs}
+          currentParaIdx={currentParaIdx}
+          onParagraphSelect={handleParagraphSeek}
         />
       </div>
 

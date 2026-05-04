@@ -1,5 +1,6 @@
 "use client";
-import { useRef, useEffect } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
+import { useState, useRef, useEffect } from "react";
 
 interface ChapterInfo {
   id: number;
@@ -11,47 +12,106 @@ interface RightPanelProps {
   chapters: ChapterInfo[];
   currentChapterIdx: number;
   onChapterSelect: (idx: number) => void;
+  paragraphs: string[];
+  currentParaIdx: number;
+  onParagraphSelect: (paraIdx: number) => void;
 }
 
 export function RightPanel({
   chapters,
   currentChapterIdx,
   onChapterSelect,
+  paragraphs,
+  currentParaIdx,
+  onParagraphSelect,
 }: RightPanelProps) {
-  // Auto-scroll active chapter row into view inside the chapter list
+  const [chaptersOpen, setChaptersOpen] = useState(true);
+  const [paragraphsOpen, setParagraphsOpen] = useState(true);
+
+  // Auto-scroll active paragraph row into view
   const activeRowRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
-    if (!activeRowRef.current) return;
+    if (currentParaIdx < 0 || !activeRowRef.current) return;
     activeRowRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
-  }, [currentChapterIdx]);
+  }, [currentParaIdx]);
 
   return (
     <div className="w-full">
       <div className="glass p-3 sticky top-2 h-[calc(100vh-1rem)] flex flex-col gap-2 overflow-hidden">
-        <div className="flex items-center gap-1 mb-1 flex-shrink-0">
-          <span className="text-xs font-medium" style={{ color: "var(--muted)" }}>
-            章节列表
-          </span>
-          <span className="text-xs ml-auto" style={{ color: "var(--muted)" }}>
-            {chapters.length}章
-          </span>
+        {/* Chapter list */}
+        <div className="flex flex-col min-h-0 flex-shrink-0">
+          <button
+            onClick={() => setChaptersOpen(!chaptersOpen)}
+            className="flex items-center gap-1 w-full text-left mb-2"
+          >
+            {chaptersOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            <span className="text-xs font-medium" style={{ color: "var(--muted)" }}>
+              章节列表
+            </span>
+            <span className="text-xs ml-auto" style={{ color: "var(--muted)" }}>
+              {chapters.length}章
+            </span>
+          </button>
+          {chaptersOpen && (
+            <div className="overflow-y-auto space-y-0.5" style={{ maxHeight: "30vh" }}>
+              {chapters.map((ch, i) => (
+                <button
+                  key={ch.id}
+                  onClick={() => onChapterSelect(i)}
+                  className="block w-full text-left px-2 py-1.5 rounded text-xs truncate transition-colors"
+                  style={{
+                    backgroundColor: i === currentChapterIdx ? "var(--glass-bg)" : "transparent",
+                    color: i === currentChapterIdx ? "var(--accent)" : "var(--muted)",
+                    fontWeight: i === currentChapterIdx ? 600 : 400,
+                  }}
+                >
+                  {ch.title || `第${i + 1}章`}
+                </button>
+              ))}
+            </div>
+          )}
         </div>
-        <div className="flex-1 overflow-y-auto space-y-0.5 min-h-0">
-          {chapters.map((ch, i) => (
-            <button
-              key={ch.id}
-              ref={i === currentChapterIdx ? activeRowRef : undefined}
-              onClick={() => onChapterSelect(i)}
-              className="block w-full text-left px-2 py-1.5 rounded text-xs truncate transition-colors"
-              style={{
-                backgroundColor: i === currentChapterIdx ? "var(--glass-bg)" : "transparent",
-                color: i === currentChapterIdx ? "var(--accent)" : "var(--muted)",
-                fontWeight: i === currentChapterIdx ? 600 : 400,
-              }}
-            >
-              {ch.title || `第${i + 1}章`}
-            </button>
-          ))}
+
+        <hr className="flex-shrink-0" style={{ borderColor: "var(--glass-border)" }} />
+
+        {/* Paragraph jump list — flex-1 fills remaining height */}
+        <div className="flex flex-col flex-1 min-h-0">
+          <button
+            onClick={() => setParagraphsOpen(!paragraphsOpen)}
+            className="flex items-center gap-1 w-full text-left mb-2 flex-shrink-0"
+          >
+            {paragraphsOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            <span className="text-xs font-medium" style={{ color: "var(--muted)" }}>
+              段落跳转
+            </span>
+            <span className="text-xs ml-auto" style={{ color: "var(--muted)" }}>
+              {paragraphs.length}段
+            </span>
+          </button>
+          {paragraphsOpen && (
+            <div className="flex-1 overflow-y-auto space-y-0.5 min-h-0">
+              {paragraphs.map((p, i) => {
+                const isCurrent = i === currentParaIdx;
+                const preview = p.length > 30 ? p.slice(0, 30) + "…" : p;
+                return (
+                  <button
+                    key={i}
+                    ref={isCurrent ? activeRowRef : undefined}
+                    onClick={() => onParagraphSelect(i)}
+                    className="flex gap-1 w-full text-left px-2 py-1.5 rounded text-xs transition-colors"
+                    style={{
+                      backgroundColor: isCurrent ? "var(--glass-bg)" : "transparent",
+                      color: isCurrent ? "var(--accent)" : "var(--muted)",
+                      fontWeight: isCurrent ? 600 : 400,
+                    }}
+                  >
+                    <span className="w-7 shrink-0 opacity-60">{i + 1}.</span>
+                    <span className="truncate flex-1">{preview}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
     </div>
