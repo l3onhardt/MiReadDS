@@ -334,10 +334,6 @@ export default function ReaderPage() {
     setCurrentChapterIdx(idx);
   };
 
-  if (!book) return <div className="flex justify-center py-20" style={{ color: "var(--muted)" }}>加载中...</div>;
-
-  const currentSceneText = manifest?.scenes?.[currentSceneIdx]?.text || null;
-
   const sceneDots = useMemo((): SceneDot[] => {
     if (!manifest) return [];
     const generatedCount = manifest.generated_scenes ?? 0;
@@ -361,6 +357,10 @@ export default function ReaderPage() {
 
   const totalScenes = manifest?.total_scenes ?? manifest?.scenes.length ?? 0;
   const generatedScenes = manifest?.generated_scenes ?? 0;
+
+  if (!book) return <div className="flex justify-center py-20" style={{ color: "var(--muted)" }}>加载中...</div>;
+
+  const currentSceneText = manifest?.scenes?.[currentSceneIdx]?.text || null;
 
   return (
     <div className="flex gap-4">
