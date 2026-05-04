@@ -22,6 +22,9 @@ interface PlayerBarProps {
   totalScenes?: number;
   generatedScenes?: number;
   onSceneClick?: (index: number) => void;
+  onTimelineSeek?: (positionMs: number) => void;
+  groupSize: number;
+  onGroupSizeChange: (size: number) => void;
 }
 
 export function PlayerBar({
@@ -34,6 +37,9 @@ export function PlayerBar({
   totalScenes = 0,
   generatedScenes = 0,
   onSceneClick,
+  onTimelineSeek,
+  groupSize,
+  onGroupSizeChange,
 }: PlayerBarProps) {
   const isReady = audioStatus === "ready";
   const isGenerating = audioStatus === "generating" || audioStatus === "pending";
@@ -75,6 +81,10 @@ export function PlayerBar({
                 totalCount={totalScenes || scenes.length}
                 generatedCount={generatedScenes || 0}
                 onSceneClick={onSceneClick || (() => {})}
+                durationMs={durationMs}
+                onTimelineSeek={onTimelineSeek}
+                groupSize={groupSize}
+                onGroupSizeChange={onGroupSizeChange}
               />
             </div>
           )}

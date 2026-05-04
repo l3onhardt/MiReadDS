@@ -45,6 +45,7 @@ export default function ReaderPage() {
   const [currentSceneIdx, setCurrentSceneIdx] = useState(0);
   const [sceneTimeMs, setSceneTimeMs] = useState(0);
   const [totalTimeMs, setTotalTimeMs] = useState(0);
+  const [groupSize, setGroupSize] = useState(30);
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const preloadAudioRef = useRef<HTMLAudioElement>(null);
@@ -400,6 +401,9 @@ export default function ReaderPage() {
           totalScenes={totalScenes}
           generatedScenes={generatedScenes}
           onSceneClick={handleSceneClick}
+          onTimelineSeek={handleSeek}
+          groupSize={groupSize}
+          onGroupSizeChange={setGroupSize}
         />
 
         <ReadingContent
