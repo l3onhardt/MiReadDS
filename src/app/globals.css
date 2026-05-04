@@ -43,3 +43,8 @@ body {
   border-radius: 14px;
   overflow: hidden;
 }
+
+@keyframes rc-breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.75; }
+}

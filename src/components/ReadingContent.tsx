@@ -22,10 +22,10 @@ export function ReadingContent({
   // Auto-scroll page so the active paragraph stays in view.
   // Triggers on currentParaIdx change (was currentSceneText) — O(1) and stable.
   useEffect(() => {
-    if (activeRef.current && isPlaying) {
+    if (activeRef.current && currentParaIdx >= 0) {
       activeRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
     }
-  }, [currentParaIdx, isPlaying]);
+  }, [currentParaIdx]);
 
   const isGenerating = audioStatus === "generating" || audioStatus === "pending";
 
@@ -109,14 +109,6 @@ export function ReadingContent({
           );
         })}
       </div>
-
-      {/* Breathe keyframes (kept) */}
-      <style>{`
-        @keyframes rc-breathe {
-          0%, 100% { opacity: 1; }
-          50% { opacity: 0.75; }
-        }
-      `}</style>
     </div>
   );
 }
