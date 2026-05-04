@@ -1,6 +1,7 @@
 "use client";
 import { Play, Pause, SkipBack, SkipForward, Loader2 } from "lucide-react";
 import { formatDuration } from "@/lib/utils";
+import { SceneTimeline, SceneDot } from "./SceneTimeline";
 
 interface PlayerBarProps {
   chapterTitle: string;
@@ -8,23 +9,31 @@ interface PlayerBarProps {
   totalChapters: number;
   isPlaying: boolean;
   audioStatus: string;
-  genProgress: number;
   onTogglePlay: () => void;
   onPrevChapter: () => void;
   onNextChapter: () => void;
   currentTimeMs: number;
   durationMs: number;
-  positionPercent: number;
-  onSeek: (ms: number) => void;
   speed: number;
   onSpeedChange: (speed: number) => void;
+  // Scene timeline props
+  scenes?: SceneDot[];
+  currentSceneIdx?: number;
+  totalScenes?: number;
+  generatedScenes?: number;
+  onSceneClick?: (index: number) => void;
 }
 
 export function PlayerBar({
-  chapterTitle, chapterIdx, totalChapters, isPlaying, audioStatus, genProgress,
+  chapterTitle, chapterIdx, totalChapters, isPlaying, audioStatus,
   onTogglePlay, onPrevChapter, onNextChapter,
-  currentTimeMs, durationMs, positionPercent, onSeek,
+  currentTimeMs, durationMs,
   speed, onSpeedChange,
+  scenes = [],
+  currentSceneIdx = 0,
+  totalScenes = 0,
+  generatedScenes = 0,
+  onSceneClick,
 }: PlayerBarProps) {
   const isReady = audioStatus === "ready";
   const isGenerating = audioStatus === "generating" || audioStatus === "pending";
@@ -53,26 +62,22 @@ export function PlayerBar({
               {chapterTitle}
             </span>
             <span className="text-xs ml-2 flex-shrink-0" style={{ color: "var(--muted)" }}>
-              {isGenerating ? "生成中..." : `${formatDuration(currentTimeMs)} / ${formatDuration(durationMs)}`}
+              {isGenerating && !isReady ? "准备中..." : formatDuration(currentTimeMs)}
             </span>
           </div>
 
-          {/* Seekable progress bar */}
-          <div className="relative h-1.5 mt-1.5 rounded-full cursor-pointer group"
-            style={{ backgroundColor: "var(--border)" }}
-            onClick={(e) => {
-              if (!isReady || durationMs <= 0) return;
-              const rect = e.currentTarget.getBoundingClientRect();
-              const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
-              onSeek(pct * durationMs);
-            }}
-          >
-            <div className="absolute inset-0 rounded-full overflow-hidden">
-              <div className="h-full rounded-full transition-all duration-200"
-                style={{ width: `${isReady ? positionPercent * 100 : 0}%`, backgroundColor: "var(--accent)" }}
+          {/* Scene timeline replaces old progress bar */}
+          {scenes.length > 0 && (
+            <div className="mt-1.5">
+              <SceneTimeline
+                scenes={scenes}
+                currentIndex={currentSceneIdx}
+                totalCount={totalScenes || scenes.length}
+                generatedCount={generatedScenes || 0}
+                onSceneClick={onSceneClick || (() => {})}
               />
             </div>
-          </div>
+          )}
 
           <div className="flex items-center justify-between mt-1">
             <span className="text-xs" style={{ color: "var(--muted)" }}>
@@ -80,7 +85,7 @@ export function PlayerBar({
             </span>
             {isGenerating && (
               <span className="text-xs" style={{ color: "var(--accent)" }}>
-                生成中 {genProgress}%...
+                生成中...
               </span>
             )}
           </div>

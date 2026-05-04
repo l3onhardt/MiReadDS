@@ -1,7 +1,8 @@
 "use client";
-import { useEffect, useState, useRef, useCallback } from "react";
+import { useEffect, useState, useRef, useCallback, useMemo } from "react";
 import { useParams } from "next/navigation";
 import { PlayerBar } from "@/components/PlayerBar";
+import { SceneDot, SceneStatus } from "@/components/SceneTimeline";
 import { ReadingContent } from "@/components/ReadingContent";
 import { CharacterPanel } from "@/components/CharacterPanel";
 import { ArrowLeft, List } from "lucide-react";
@@ -53,7 +54,6 @@ export default function ReaderPage() {
   const preloadTriggered = useRef(false);
   const restorePos = useRef(0);
   const totalDurationMs = manifest?.total_duration_ms || 0;
-  const positionPct = totalDurationMs > 0 ? totalTimeMs / totalDurationMs : 0;
 
   const currentChapter: ChapterInfo | undefined = book?.chapters?.[currentChapterIdx];
 
@@ -338,6 +338,30 @@ export default function ReaderPage() {
 
   const currentSceneText = manifest?.scenes?.[currentSceneIdx]?.text || null;
 
+  const sceneDots = useMemo((): SceneDot[] => {
+    if (!manifest) return [];
+    const generatedCount = manifest.generated_scenes ?? 0;
+    return manifest.scenes.map((_, idx) => {
+      let status: SceneStatus;
+      if (idx < currentSceneIdx) status = "played";
+      else if (idx === currentSceneIdx) status = "current";
+      else if (idx < generatedCount) status = "ready";
+      else if (idx === generatedCount) status = "generating";
+      else status = "waiting";
+      return { index: idx, status };
+    });
+  }, [manifest, currentSceneIdx]);
+
+  const handleSceneClick = useCallback((sceneIdx: number) => {
+    if (!manifest) return;
+    setCurrentSceneIdx(sceneIdx);
+    setSceneTimeMs(0);
+    setTimeout(() => playScene(sceneIdx, 0), 0);
+  }, [manifest, playScene]);
+
+  const totalScenes = manifest?.total_scenes ?? manifest?.scenes.length ?? 0;
+  const generatedScenes = manifest?.generated_scenes ?? 0;
+
   return (
     <div className="flex gap-4">
       <div className="flex-1 min-w-0">
@@ -373,16 +397,18 @@ export default function ReaderPage() {
           totalChapters={book.chapters.length}
           isPlaying={isPlaying}
           audioStatus={audioStatus}
-          genProgress={genProgress}
           onTogglePlay={togglePlay}
           onPrevChapter={() => currentChapterIdx > 0 && goToChapter(currentChapterIdx - 1)}
           onNextChapter={() => currentChapterIdx < book.chapters.length - 1 && goToChapter(currentChapterIdx + 1)}
           currentTimeMs={totalTimeMs}
           durationMs={totalDurationMs}
-          positionPercent={positionPct}
-          onSeek={handleSeek}
           speed={speed}
           onSpeedChange={setSpeed}
+          scenes={sceneDots}
+          currentSceneIdx={currentSceneIdx}
+          totalScenes={totalScenes}
+          generatedScenes={generatedScenes}
+          onSceneClick={handleSceneClick}
         />
 
         <ReadingContent
