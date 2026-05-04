@@ -76,7 +76,10 @@ export default function ReaderPage() {
     if (endedGuard.current) return;
     endedGuard.current = true;
 
-    if (!manifest) return;
+    if (!manifest) {
+      endedGuard.current = false;
+      return;
+    }
 
     if (currentSceneIdx < manifest.scenes.length - 1) {
       setCurrentSceneIdx((s) => s + 1);
@@ -96,15 +99,15 @@ export default function ReaderPage() {
     }
   }, [manifest, currentSceneIdx, currentChapterIdx, book]);
 
-  // Play a specific scene — waits if scene not yet generated
+  // Play a specific scene — quick poll then skip if not ready
   const playScene = useCallback(async (sceneIdx: number, startMs: number) => {
     if (!manifest || !audioRef.current) return;
     let scene = manifest.scenes[sceneIdx];
     if (!scene) return;
 
-    // If scene audio not ready yet, poll manifest until it is
+    // If scene audio not ready yet, short poll (max 10s)
     if (!scene.path && currentChapter) {
-      for (let i = 0; i < 60; i++) {
+      for (let i = 0; i < 5; i++) {
         await new Promise((r) => setTimeout(r, 2000));
         const res = await fetch(`/api/tts?chapterId=${currentChapter.id}`);
         const data = await res.json();
@@ -119,7 +122,10 @@ export default function ReaderPage() {
 
     if (!scene?.path) {
       console.warn("Scene not available, skipping:", sceneIdx);
-      advance();
+      endedGuard.current = false;
+      if (sceneIdx < manifest.scenes.length - 1) {
+        setCurrentSceneIdx((s) => s + 1);
+      }
       return;
     }
 
@@ -139,7 +145,7 @@ export default function ReaderPage() {
     audioRef.current.playbackRate = speed;
     audioRef.current.addEventListener("canplay", onLoaded, { once: true });
     audioRef.current.load();
-  }, [manifest, currentChapter, speed, advance]);
+  }, [manifest, currentChapter, speed]);
 
   // When scene changes, play it
   useEffect(() => {
