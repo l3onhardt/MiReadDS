@@ -400,13 +400,13 @@ export default function ReaderPage() {
           <Link href="/" className="flex-shrink-0" style={{ color: "var(--muted)" }}><ArrowLeft size={20} /></Link>
           <div className="min-w-0 flex-1"><h1 className="text-lg font-semibold truncate">{book.title}</h1></div>
           <button onClick={() => setChapterListOpen(!chapterListOpen)}
-            className="flex-shrink-0 p-1.5 rounded-lg lg:hidden" style={{ color: "var(--muted)" }}>
+            className="flex-shrink-0 p-1.5 rounded-lg md:hidden" style={{ color: "var(--muted)" }}>
             <List size={20} />
           </button>
         </div>
 
         {chapterListOpen && (
-          <div className="glass p-3 mb-4 max-h-64 overflow-y-auto rounded-xl lg:hidden">
+          <div className="glass p-3 mb-4 max-h-64 overflow-y-auto rounded-xl md:hidden">
             {(book.chapters || []).map((ch: ChapterInfo, i: number) => (
               <button key={ch.id}
                 onClick={() => { goToChapter(i); setChapterListOpen(false); }}
@@ -468,7 +468,7 @@ export default function ReaderPage() {
       </div>
 
       {/* RIGHT: Collapsible panel 30% */}
-      <div className="flex-[3] min-w-0 hidden lg:block">
+      <div className="flex-[3] min-w-0 hidden md:block">
         <RightPanel
           chapters={(book.chapters || []).map((ch: any) => ({ id: ch.id, index: ch.index, title: ch.title }))}
           currentChapterIdx={currentChapterIdx}
