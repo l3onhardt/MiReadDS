@@ -125,7 +125,14 @@ export async function importBook(file: File): Promise<Book> {
   return db.prepare("SELECT * FROM books WHERE id = ?").get(bookId) as Book;
 }
 
-export function listBooks(): Book[] {
+export function listBooks(): (Book & {
+  chapter_count: number;
+  character_count: number;
+  progress_chapter: number | null;
+  progress_position_ms: number | null;
+  audio_ready_scenes: number;
+  audio_total_scenes: number;
+})[] {
   const db = getDb();
   const books = db.prepare(`
     SELECT b.*,
@@ -136,8 +143,16 @@ export function listBooks(): Book[] {
     FROM books b
     LEFT JOIN reading_progress p ON p.book_id = b.id
     ORDER BY b.updated_at DESC
-  `).all();
-  return books as Book[];
+  `).all() as any[];
+
+  // Attach audio progress for each book (books are few, loop is cheap)
+  for (const book of books) {
+    const prog = getBookAudioProgress(book.id);
+    book.audio_ready_scenes = prog.generatedScenes;
+    book.audio_total_scenes = prog.totalScenes;
+  }
+
+  return books;
 }
 
 export function getBook(id: number) {
@@ -640,4 +655,43 @@ export function saveProgress(bookId: number, chapterIndex: number, positionMs: n
      VALUES (?, ?, ?, datetime('now'))
      ON CONFLICT(book_id) DO UPDATE SET chapter_index = ?, position_ms = ?, updated_at = datetime('now')`
   ).run(bookId, chapterIndex, positionMs, chapterIndex, positionMs);
+}
+
+export interface BookAudioProgress {
+  bookId: number;
+  totalScenes: number;
+  generatedScenes: number;
+  percent: number;
+}
+
+export function getBookAudioProgress(bookId: number): BookAudioProgress {
+  const db = getDb();
+  const chapters = db.prepare(
+    "SELECT id FROM chapters WHERE book_id = ? ORDER BY \"index\""
+  ).all(bookId) as { id: number }[];
+
+  let totalScenes = 0;
+  let generatedScenes = 0;
+
+  for (const ch of chapters) {
+    const row = db.prepare(
+      "SELECT scene_script, status FROM chapter_audio WHERE chapter_id = ?"
+    ).get(ch.id) as any;
+
+    if (row?.scene_script) {
+      try {
+        const manifest = JSON.parse(row.scene_script);
+        const scenes = manifest.scenes || [];
+        totalScenes += scenes.length;
+        generatedScenes += scenes.filter((s: any) => s.path && s.path.length > 0).length;
+      } catch {}
+    }
+  }
+
+  return {
+    bookId,
+    totalScenes,
+    generatedScenes,
+    percent: totalScenes > 0 ? Math.round((generatedScenes / totalScenes) * 100) : 0,
+  };
 }
