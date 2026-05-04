@@ -42,7 +42,7 @@ export function RightPanel({
   });
 
   return (
-    <div className="hidden lg:block w-full">
+    <div className="w-full">
       <div className="glass p-3 sticky top-20 space-y-3">
         {/* Chapter list section */}
         <div>
