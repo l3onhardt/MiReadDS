@@ -31,10 +31,9 @@ export function RightPanel({
   // Auto-scroll active paragraph row into view
   const activeRowRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
-    if (activeRowRef.current && paragraphsOpen) {
-      activeRowRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
-    }
-  }, [currentParaIdx, paragraphsOpen]);
+    if (currentParaIdx < 0 || !activeRowRef.current) return;
+    activeRowRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [currentParaIdx]);
 
   return (
     <div className="w-full">
@@ -96,17 +95,15 @@ export function RightPanel({
                     key={i}
                     ref={isCurrent ? activeRowRef : undefined}
                     onClick={() => onParagraphSelect(i)}
-                    className="block w-full text-left px-2 py-1.5 rounded text-xs transition-colors"
+                    className="flex gap-1 w-full text-left px-2 py-1.5 rounded text-xs transition-colors"
                     style={{
                       backgroundColor: isCurrent ? "var(--glass-bg)" : "transparent",
                       color: isCurrent ? "var(--accent)" : "var(--muted)",
                       fontWeight: isCurrent ? 600 : 400,
                     }}
                   >
-                    <span className="inline-block w-7 opacity-60">{i + 1}.</span>
-                    <span className="truncate inline-block max-w-[calc(100%-2rem)] align-middle">
-                      {preview}
-                    </span>
+                    <span className="w-7 shrink-0 opacity-60">{i + 1}.</span>
+                    <span className="truncate flex-1">{preview}</span>
                   </button>
                 );
               })}
