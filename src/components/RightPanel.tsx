@@ -28,8 +28,13 @@ export function RightPanel({
   const [chaptersOpen, setChaptersOpen] = useState(true);
   const [paragraphsOpen, setParagraphsOpen] = useState(true);
 
-  // Auto-scroll active paragraph row into view
+  // Auto-scroll active rows into view inside their respective lists
+  const activeChapterRef = useRef<HTMLButtonElement>(null);
   const activeRowRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!activeChapterRef.current) return;
+    activeChapterRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+  }, [currentChapterIdx]);
   useEffect(() => {
     if (currentParaIdx < 0 || !activeRowRef.current) return;
     activeRowRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -39,10 +44,10 @@ export function RightPanel({
     <div className="w-full">
       <div className="glass p-3 sticky top-2 h-[calc(100vh-1rem)] flex flex-col gap-2 overflow-hidden">
         {/* Chapter list */}
-        <div className="flex flex-col min-h-0 flex-shrink-0">
+        <div className="flex flex-col flex-1 min-h-0">
           <button
             onClick={() => setChaptersOpen(!chaptersOpen)}
-            className="flex items-center gap-1 w-full text-left mb-2"
+            className="flex items-center gap-1 w-full text-left mb-2 flex-shrink-0"
           >
             {chaptersOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
             <span className="text-xs font-medium" style={{ color: "var(--muted)" }}>
@@ -53,10 +58,11 @@ export function RightPanel({
             </span>
           </button>
           {chaptersOpen && (
-            <div className="overflow-y-auto space-y-0.5" style={{ maxHeight: "30vh" }}>
+            <div className="flex-1 overflow-y-auto space-y-0.5 min-h-0">
               {chapters.map((ch, i) => (
                 <button
                   key={ch.id}
+                  ref={i === currentChapterIdx ? activeChapterRef : undefined}
                   onClick={() => onChapterSelect(i)}
                   className="block w-full text-left px-2 py-1.5 rounded text-xs truncate transition-colors"
                   style={{
