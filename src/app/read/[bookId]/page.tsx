@@ -473,10 +473,9 @@ export default function ReaderPage() {
           chapters={(book.chapters || []).map((ch: any) => ({ id: ch.id, index: ch.index, title: ch.title }))}
           currentChapterIdx={currentChapterIdx}
           onChapterSelect={goToChapter}
-          scenes={sceneDots}
-          currentSceneIdx={currentSceneIdx}
-          onSceneClick={handleSceneClick}
-          groupSize={groupSize}
+          paragraphs={paragraphs}
+          currentParaIdx={currentParaIdx}
+          onParagraphSelect={handleParagraphSeek}
         />
       </div>
 

@@ -1,7 +1,6 @@
 "use client";
 import { ChevronDown, ChevronRight } from "lucide-react";
-import { useState } from "react";
-import type { SceneDot } from "./SceneTimeline";
+import { useState, useRef, useEffect } from "react";
 
 interface ChapterInfo {
   id: number;
@@ -13,38 +12,34 @@ interface RightPanelProps {
   chapters: ChapterInfo[];
   currentChapterIdx: number;
   onChapterSelect: (idx: number) => void;
-  scenes: SceneDot[];
-  currentSceneIdx: number;
-  onSceneClick: (index: number) => void;
-  groupSize: number;
+  paragraphs: string[];
+  currentParaIdx: number;
+  onParagraphSelect: (paraIdx: number) => void;
 }
 
 export function RightPanel({
   chapters,
   currentChapterIdx,
   onChapterSelect,
-  scenes,
-  currentSceneIdx,
-  onSceneClick,
-  groupSize,
+  paragraphs,
+  currentParaIdx,
+  onParagraphSelect,
 }: RightPanelProps) {
   const [chaptersOpen, setChaptersOpen] = useState(true);
-  const [scenesOpen, setScenesOpen] = useState(true);
+  const [paragraphsOpen, setParagraphsOpen] = useState(true);
 
-  const currentGroupIdx = Math.floor(currentSceneIdx / groupSize);
-  const totalGroups = Math.ceil(scenes.length / groupSize);
-
-  const sceneGroups = Array.from({ length: totalGroups }, (_, gi) => {
-    const start = gi * groupSize;
-    const end = Math.min(start + groupSize, scenes.length);
-    const groupScenes = scenes.slice(start, end);
-    return { index: gi, start, end, scenes: groupScenes };
-  });
+  // Auto-scroll active paragraph row into view
+  const activeRowRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (activeRowRef.current && paragraphsOpen) {
+      activeRowRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [currentParaIdx, paragraphsOpen]);
 
   return (
     <div className="w-full">
       <div className="glass p-3 sticky top-20 space-y-3">
-        {/* Chapter list section */}
+        {/* Chapter list */}
         <div>
           <button
             onClick={() => setChaptersOpen(!chaptersOpen)}
@@ -56,7 +51,7 @@ export function RightPanel({
             </span>
           </button>
           {chaptersOpen && (
-            <div className="max-h-48 overflow-y-auto space-y-0.5">
+            <div className="max-h-[30vh] overflow-y-auto space-y-0.5">
               {chapters.map((ch, i) => (
                 <button
                   key={ch.id}
@@ -77,36 +72,44 @@ export function RightPanel({
 
         <hr style={{ borderColor: "var(--glass-border)" }} />
 
-        {/* Scene group navigation */}
+        {/* Paragraph jump list */}
         <div>
           <button
-            onClick={() => setScenesOpen(!scenesOpen)}
+            onClick={() => setParagraphsOpen(!paragraphsOpen)}
             className="flex items-center gap-1 w-full text-left mb-2"
           >
-            {scenesOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+            {paragraphsOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
             <span className="text-xs font-medium" style={{ color: "var(--muted)" }}>
-              段落导航
+              段落跳转
             </span>
             <span className="text-xs ml-auto" style={{ color: "var(--muted)" }}>
-              {scenes.length}段
+              {paragraphs.length}段
             </span>
           </button>
-          {scenesOpen && (
-            <div className="max-h-64 overflow-y-auto space-y-0.5">
-              {sceneGroups.map(({ index: gi, start, end }) => (
-                <button
-                  key={gi}
-                  onClick={() => onSceneClick(start)}
-                  className="block w-full text-left px-2 py-1.5 rounded text-xs transition-colors"
-                  style={{
-                    backgroundColor: gi === currentGroupIdx ? "var(--glass-bg)" : "transparent",
-                    color: gi === currentGroupIdx ? "var(--accent)" : "var(--muted)",
-                    fontWeight: gi === currentGroupIdx ? 600 : 400,
-                  }}
-                >
-                  段 {start + 1}-{end}
-                </button>
-              ))}
+          {paragraphsOpen && (
+            <div className="max-h-[40vh] overflow-y-auto space-y-0.5">
+              {paragraphs.map((p, i) => {
+                const isCurrent = i === currentParaIdx;
+                const preview = p.length > 30 ? p.slice(0, 30) + "…" : p;
+                return (
+                  <button
+                    key={i}
+                    ref={isCurrent ? activeRowRef : undefined}
+                    onClick={() => onParagraphSelect(i)}
+                    className="block w-full text-left px-2 py-1.5 rounded text-xs transition-colors"
+                    style={{
+                      backgroundColor: isCurrent ? "var(--glass-bg)" : "transparent",
+                      color: isCurrent ? "var(--accent)" : "var(--muted)",
+                      fontWeight: isCurrent ? 600 : 400,
+                    }}
+                  >
+                    <span className="inline-block w-7 opacity-60">{i + 1}.</span>
+                    <span className="truncate inline-block max-w-[calc(100%-2rem)] align-middle">
+                      {preview}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           )}
         </div>
