@@ -35,6 +35,8 @@ export function ReadingContent({
   const dragState = useRef({
     active: false,
     startX: 0,
+    lastClientX: 0,
+    accumulatedMs: 0,
     lastSeekX: 0,
     lastSeekTime: 0,
   });
@@ -53,6 +55,8 @@ export function ReadingContent({
     dragState.current = {
       active: true,
       startX: e.clientX,
+      lastClientX: e.clientX,
+      accumulatedMs: 0,
       lastSeekX: e.clientX,
       lastSeekTime: Date.now(),
     };
@@ -66,8 +70,11 @@ export function ReadingContent({
 
     const containerWidth = containerRef.current?.offsetWidth || 400;
     const speedFactor = Math.abs(e.movementX) > 10 ? 2 : 1;
-    const offsetMs = (deltaX / containerWidth) * durationMs * speedFactor;
-    const newPos = Math.max(0, Math.min(durationMs, currentTimeMs + offsetMs));
+    const incrementalPx = e.clientX - dragState.current.lastClientX;
+    dragState.current.lastClientX = e.clientX;
+    const incrementalMs = (incrementalPx / containerWidth) * durationMs * speedFactor;
+    dragState.current.accumulatedMs += incrementalMs;
+    const newPos = Math.max(0, Math.min(durationMs, currentTimeMs + dragState.current.accumulatedMs));
     const diffMs = newPos - currentTimeMs;
 
     const direction = diffMs > 0 ? "快进" : "快退";
@@ -126,7 +133,7 @@ export function ReadingContent({
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerUp}
-      style={{ touchAction: "none" }}
+      style={{ touchAction: "pan-y" }}
     >
       {isGenerating && (
         <div className="absolute top-3 right-3 flex items-center gap-2 text-xs" style={{ color: "var(--accent)" }}>
@@ -150,7 +157,7 @@ export function ReadingContent({
                 transform: isCurrent ? "scale(1.01)" : "scale(1)",
                 opacity: isPlaying ? (isCurrent ? 1 : 0.5) : 1,
                 fontWeight: isCurrent ? 500 : 400,
-                animation: isCurrent && isPlaying ? "breathe 2s ease-in-out infinite" : "none",
+                animation: isCurrent && isPlaying ? "rc-breathe 2s ease-in-out infinite" : "none",
               }}
             >
               {p}
@@ -183,10 +190,10 @@ export function ReadingContent({
       </div>
 
       {/* Breathe keyframes */}
-      <style jsx>{`
-        @keyframes breathe {
-          0%, 100% { background-color: transparent; }
-          50% { background-color: var(--glass-bg); }
+      <style>{`
+        @keyframes rc-breathe {
+          0%, 100% { background-color: var(--glass-bg); }
+          50% { background-color: rgba(128, 128, 128, 0.08); }
         }
       `}</style>
     </div>
