@@ -684,7 +684,9 @@ export function getBookAudioProgress(bookId: number): BookAudioProgress {
         const scenes = manifest.scenes || [];
         totalScenes += scenes.length;
         generatedScenes += scenes.filter((s: any) => s.path && s.path.length > 0).length;
-      } catch {}
+      } catch (e) {
+        console.error(`Corrupt scene_script for chapter ${ch.id}:`, e);
+      }
     }
   }
 
