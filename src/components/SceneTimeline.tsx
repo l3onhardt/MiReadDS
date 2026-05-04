@@ -177,9 +177,10 @@ export function SceneTimeline({
       <div
         ref={scrollRef}
         onWheel={handleWheel}
-        className="flex items-end gap-[2px] overflow-x-auto py-2 select-none"
-        style={{ scrollbarWidth: "none", msOverflowStyle: "none", height: 32 }}
+        className="overflow-x-auto select-none"
+        style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
       >
+      <div className="flex items-end gap-[2px] py-2 select-none" style={{ paddingTop: 20, minHeight: 44 }}>
         {groups.map((groupScenes, gi) => {
           const st = groupStatus(groupScenes);
           const isCurrent = gi === currentGroupIdx;
@@ -194,7 +195,7 @@ export function SceneTimeline({
               onMouseEnter={(e) => handleGroupEnter(gi, e)}
               onMouseLeave={handleGroupLeave}
               onClick={() => onSceneClick(groupScenes[0].index)}
-              className="flex-shrink-0 rounded-[2px] relative transition-all duration-200 hover:brightness-110"
+              className={`flex-shrink-0 rounded-[2px] relative transition-all duration-200 hover:brightness-110 ${st === "generating" ? "animate-pulse" : ""}`}
               style={{
                 width: Math.max(10, Math.min(22, 18 * (30 / groupSize))),
                 height: `${barHeight}px`,
@@ -221,6 +222,7 @@ export function SceneTimeline({
             </button>
           );
         })}
+      </div>
       </div>
 
       {/* Drag bar */}
@@ -268,7 +270,7 @@ export function SceneTimeline({
                   setHoveredGroup(null);
                   setTooltipPos(null);
                 }}
-                className="w-2.5 h-2.5 rounded-full flex-shrink-0 cursor-pointer hover:scale-150 transition-transform"
+                className={`w-2.5 h-2.5 rounded-full flex-shrink-0 cursor-pointer hover:scale-150 transition-transform ${dot.status === "generating" ? "animate-pulse" : ""}`}
                 style={{
                   backgroundColor: statusColor(dot.status),
                   opacity: statusOpacity(dot.status),
