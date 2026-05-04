@@ -37,9 +37,9 @@ export function RightPanel({
 
   return (
     <div className="w-full">
-      <div className="glass p-3 sticky top-20 space-y-3">
+      <div className="glass p-3 sticky top-2 h-[calc(100vh-1rem)] flex flex-col gap-2 overflow-hidden">
         {/* Chapter list */}
-        <div>
+        <div className="flex flex-col min-h-0 flex-shrink-0">
           <button
             onClick={() => setChaptersOpen(!chaptersOpen)}
             className="flex items-center gap-1 w-full text-left mb-2"
@@ -48,9 +48,12 @@ export function RightPanel({
             <span className="text-xs font-medium" style={{ color: "var(--muted)" }}>
               章节列表
             </span>
+            <span className="text-xs ml-auto" style={{ color: "var(--muted)" }}>
+              {chapters.length}章
+            </span>
           </button>
           {chaptersOpen && (
-            <div className="max-h-[30vh] overflow-y-auto space-y-0.5">
+            <div className="overflow-y-auto space-y-0.5" style={{ maxHeight: "30vh" }}>
               {chapters.map((ch, i) => (
                 <button
                   key={ch.id}
@@ -69,13 +72,13 @@ export function RightPanel({
           )}
         </div>
 
-        <hr style={{ borderColor: "var(--glass-border)" }} />
+        <hr className="flex-shrink-0" style={{ borderColor: "var(--glass-border)" }} />
 
-        {/* Paragraph jump list */}
-        <div>
+        {/* Paragraph jump list — flex-1 fills remaining height */}
+        <div className="flex flex-col flex-1 min-h-0">
           <button
             onClick={() => setParagraphsOpen(!paragraphsOpen)}
-            className="flex items-center gap-1 w-full text-left mb-2"
+            className="flex items-center gap-1 w-full text-left mb-2 flex-shrink-0"
           >
             {paragraphsOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
             <span className="text-xs font-medium" style={{ color: "var(--muted)" }}>
@@ -86,7 +89,7 @@ export function RightPanel({
             </span>
           </button>
           {paragraphsOpen && (
-            <div className="max-h-[40vh] overflow-y-auto space-y-0.5">
+            <div className="flex-1 overflow-y-auto space-y-0.5 min-h-0">
               {paragraphs.map((p, i) => {
                 const isCurrent = i === currentParaIdx;
                 const preview = p.length > 30 ? p.slice(0, 30) + "…" : p;
