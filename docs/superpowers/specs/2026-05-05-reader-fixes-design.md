@@ -142,14 +142,15 @@ interface ReadingContentProps {
 
 // 新
 interface ReadingContentProps {
-  content: string;
-  scenes: { text: string }[];           // 新增,用于建映射
-  currentSceneIdx: number;              // 新增,直接定位当前段
+  paragraphs: string[];                          // 由 page.tsx 拆好传入
+  currentParaIdx: number;                        // 由 page.tsx 通过 sceneToPara[currentSceneIdx] 算出
   isPlaying: boolean;
   audioStatus: string;
-  onParagraphSeek: (paraIdx: number) => void;  // 新增 — 替换 onTextSeek
+  onParagraphSeek: (paraIdx: number) => void;    // 替换 onTextSeek
 }
 ```
+
+`ReadingContent` 不再持有 `content` 或 `scenes` — 段落拆分和 scene→para 映射都在 `page.tsx` 完成,`ReadingContent` 只负责渲染段落列表和 gutter 交互,保持单一职责。
 
 `page.tsx` 配套实现:
 
@@ -158,12 +159,14 @@ const handleParagraphSeek = useCallback((paraIdx: number) => {
   if (!manifest) return;
   // 找该段第一个 scene
   const firstSceneIdx = sceneToPara.findIndex((p) => p === paraIdx);
-  if (firstSceneIdx < 0) return;
+  if (firstSceneIdx < 0) return;  // 该段没生成任何 scene(理论上不会,防御性返回)
   setCurrentSceneIdx(firstSceneIdx);
   setSceneTimeMs(0);
   setTimeout(() => playScene(firstSceneIdx, 0), 0);
 }, [manifest, sceneToPara, playScene]);
 ```
+
+**关于"无 scene 段落"的处理:** 后端 `splitTextIntoScenes` 在过滤 `p.trim().length > 0` 后才生成 scene,前端 `paragraphs` 用同样的过滤,因此在数据正确情况下每段至少对应 1 个 scene。`findIndex < 0` 是防御性保护,正常路径不会触发。`RightPanel` 段落列表显示所有 paragraphs,点击后走同一 seek 路径,`< 0` 时安静 no-op,不显示错误。
 
 #### 移动端
 
@@ -195,6 +198,8 @@ const handleParagraphSeek = useCallback((paraIdx: number) => {
 页面变为单一滚动容器,PlayerBar `sticky top-2 z-10` 自然浮在顶部。当前段进入视口外时,`scrollIntoView` 滚动 `<html>` 而非内嵌容器:
 
 ```ts
+// 现有代码 deps: [currentSceneText, isPlaying]  — 段文本字符串变化时触发
+// 改后 deps: [currentParaIdx, isPlaying]      — 段索引变化时触发,稳定且 O(1)
 useEffect(() => {
   if (activeRef.current && isPlaying) {
     activeRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -303,6 +308,7 @@ handleParagraphSeek(paraIdx):
 - [ ] 当前播放段进入视口外时页面平滑滚动让其居中
 - [ ] 右侧栏不再显示重复的时间轴/分组柱状图;显示段落跳转列表
 - [ ] 右侧栏点击某段跳转后,正文 gutter 高亮、PlayerBar 时间轴位置同步更新
+- [ ] 切换章节后 `sceneToPara` 映射重新计算,新章节首段正确识别(回归原 bug 主要发生场景)
 
 ---
 
